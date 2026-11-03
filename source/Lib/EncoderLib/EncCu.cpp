@@ -52,6 +52,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "EncModeCtrl.h"
 #include "BitAllocation.h"
 #include "EncStage.h"
+#include "RLQpAction.h"
 
 #include "CommonLib/dtrace_codingstruct.h"
 #include "CommonLib/Picture.h"
@@ -501,6 +502,36 @@ void EncCu::encodeCtu( Picture* pic, int (&prevQP)[MAX_NUM_CH], uint32_t ctuXPos
 
   xCompressCtu( cs, ctuArea, ctuRsAddr, prevQP );
 
+  // Final-CTU audit is separate from xCompressCU candidate-QG traces.
+  // It only reads the winning CU tree, and does not alter encoding decisions.
+  // Lock the same mutex used by cs.useSubStructure in the threaded path.
+  if( rl::QpActionMap::enabled() && rl::QpActionMap::traceEnabled() && !pic->isPreAnalysis )
+  {
+    int minLumaQp = MAX_QP;
+    int maxLumaQp = -MAX_QP;
+    unsigned nLumaCus = 0;
+    if( m_wppMutex ) m_wppMutex->lock();
+    for( const CodingUnit* cu : cs.cus )
+    {
+      if( cu->chType == CH_L &&
+          cu->lumaPos().x >= pos.x && cu->lumaPos().x < pos.x + (int) pcv.maxCUSize &&
+          cu->lumaPos().y >= pos.y && cu->lumaPos().y < pos.y + (int) pcv.maxCUSize )
+      {
+        ++nLumaCus;
+        minLumaQp = std::min( minLumaQp, (int) cu->qp );
+        maxLumaQp = std::max( maxLumaQp, (int) cu->qp );
+      }
+    }
+    if( m_wppMutex ) m_wppMutex->unlock();
+
+    const int requestedDelta = rl::QpActionMap::deltaFor( slice->poc,
+      (unsigned) pos.x, (unsigned) pos.y, (unsigned) pcv.maxCUSize,
+      (unsigned) pcv.widthInCtus, (unsigned) pcv.heightInCtus );
+    rl::QpActionMap::traceFinalCtu( slice->poc, (unsigned) ctuRsAddr,
+      (unsigned) pos.x, (unsigned) pos.y, requestedDelta,
+      nLumaCus, nLumaCus ? minLumaQp : -1, nLumaCus ? maxLumaQp : -1 );
+  }
+
   m_CABACEstimator->resetBits();
   m_CABACEstimator->coding_tree_unit( cs, ctuArea, prevQP, ctuRsAddr, true, true );
 
@@ -810,6 +841,45 @@ void EncCu::xCompressCU( CodingStructure*& tempCS, CodingStructure*& bestCS, Par
 
       updateLambda (slice, pic->ctuQpaLambda[ctuRsAddr], pic->ctuAdaptedQP[ctuRsAddr], tempCS->baseQP, true);
     }
+  }
+
+  // Research extension: one fixed PPO-QP action map per POC (first-stage integration).
+  // Apply only where VVenC has already chosen a quantization-group QP.
+  // For nonzero actions, preserve VVenC's QPA-derived lambda baseline and
+  // update the RDO/quantization lambdas consistently with the new QP.
+  // The unconfigured and zero-action paths leave the original encoder intact.
+  // Inter CU descendants can inherit their parent QP without a fresh QPA
+  // decision. Re-applying delta in those descendants would compound the action.
+  // Only attach the action when original QPA established a QP at this level.
+  const bool rlQpaDecision = partitioner.currSubdiv == 0 ||
+                              ( partitioner.currSubdiv > 0 && slice.isIntra() );
+  if( rl::QpActionMap::enabled() && m_pcEncCfg->m_usePerceptQPA &&
+      pps.useDQP && isLuma( partitioner.chType ) &&
+      partitioner.currQgEnable() && rlQpaDecision )
+  {
+    const PreCalcValues& pcv = *pps.pcv;
+    Picture* const pic = bestCS->picture;
+    const uint32_t ctuRsAddr = getCtuAddr( partitioner.currQgPos, pcv );
+    const int delta = rl::QpActionMap::deltaFor( slice.poc,
+                                                (unsigned) partitioner.currQgPos.x,
+                                                (unsigned) partitioner.currQgPos.y,
+                                                (unsigned) pcv.maxCUSize,
+                                                (unsigned) pcv.widthInCtus,
+                                                (unsigned) pcv.heightInCtus );
+    const int baseQp = tempCS->baseQP;
+    const int appliedQp = Clip3( -sps.qpBDOffset[CH_L], MAX_QP, baseQp + delta );
+    if( appliedQp != baseQp )
+    {
+      tempCS->currQP[partitioner.chType] = tempCS->baseQP =
+      bestCS->currQP[partitioner.chType] = bestCS->baseQP = appliedQp;
+      updateLambda( slice, pic->ctuQpaLambda[ctuRsAddr],
+                    pic->ctuAdaptedQP[ctuRsAddr], appliedQp, true );
+    }
+    rl::QpActionMap::trace( slice.poc, (unsigned) partitioner.currQgPos.x,
+                            (unsigned) partitioner.currQgPos.y, baseQp, delta, appliedQp,
+                            (unsigned) partitioner.currSubdiv,
+                            (unsigned) partitioner.currDepth,
+                            (unsigned) lumaArea.width, (unsigned) lumaArea.height );
   }
 
   if (partitioner.currQtDepth == 0)
