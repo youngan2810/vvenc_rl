@@ -113,11 +113,11 @@ public:
           double(rc->encRCSeq->lastAverageQP) / 63.0));
     }
 
-    // Global [8]: target rate, progress, used budget, remaining budget,
+    // Global [8]: target rate, decision-order progress, used budget, remaining budget,
     // previous QP, picture QP, intra flag, temporal layer.
     const std::array<double,8> global = {{
       target / 200000.0,
-      double(std::max(0, slice.poc)) / totalFrames,
+      0.0, // patched below, after locking the observation output
       usedFraction,
       std::max(0.0, 1.0 - usedFraction),
       lastQP,
@@ -128,6 +128,9 @@ public:
 
     static std::mutex outputMutex;
     std::lock_guard<std::mutex> lock(outputMutex);
+    // Count pre-action observations as actually emitted, independently of
+    // B-picture POC reorder. The vvencapp process encodes one episode.
+    static int decisionIndex = 0;
     static std::ofstream output;
     if( !output.is_open() )
     {
@@ -136,7 +139,10 @@ public:
         throw std::runtime_error("VVenC-RL: cannot open observation output file");
     }
     output << "STATE " << slice.poc << std::setprecision(9);
-    for( double v : global ) output << ' ' << v;
+    // Global slot 1 is causal decision progress; other slots are unchanged.
+    for( unsigned i = 0; i < global.size(); ++i )
+      output << ' ' << (i == 1 ? double(decisionIndex) / totalFrames : global[i]);
+    ++decisionIndex;
     for( double v : spatial ) output << ' ' << v;
     for( double v : temporal ) output << ' ' << v;
     for( double v : qpa ) output << ' ' << v;
