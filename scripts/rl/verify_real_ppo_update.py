@@ -23,7 +23,7 @@ import random
 import numpy as np
 import torch
 
-from ppo_agent import PPOActorCritic, PPOTrainer, Transition
+from ppo_agent import MODEL_VERSION, PPOActorCritic, PPOTrainer, Transition
 
 
 def sha256(path: Path) -> str:
@@ -47,7 +47,8 @@ def read_real_rollout(episode: Path):
             "UPDATED_POLICY_REWARD_DATA_COLLECTION",
         )
         or summary.get("ppo_policy_training") is not False
-        or summary.get("target_kbps") != 120
+        or summary.get("target_kbps") not in (50, 80, 120, 160, 200)
+        or summary.get("deterministic_policy", False)
         or summary.get("au_sum_matches_stream") is not True
     ):
         raise ValueError("Invalid or non-Train real Reward pilot summary")
@@ -144,6 +145,7 @@ def checkpoint_and_verify(
         raise FileExistsError("Checkpoint already exists; refuse double update on same rollout")
     state = {
         "schema": "vvenc-ppo-single-real-rollout-gate/1",
+        "model_version": MODEL_VERSION,
         "experiment_stage": "one_update_only_not_full_training",
         "model_state": trainer.model.state_dict(),
         "optimizer_state": trainer.optimizer.state_dict(),
@@ -238,6 +240,7 @@ def one_true_rollout_update(
             raise ValueError("Collector checkpoint hash mismatch: episode was sampled by another policy")
         prev = torch.load(checkpoint_in, map_location="cpu", weights_only=True)
         if (prev.get("schema") != "vvenc-ppo-single-real-rollout-gate/1"
+                or prev.get("model_version") != MODEL_VERSION
                 or prev.get("split") != "train"
                 or prev.get("baseline_lock_sha256") != summary["baseline_lock_sha256"]):
             raise ValueError("Collector checkpoint is not a compatible Train PPO checkpoint")
@@ -275,7 +278,7 @@ def one_true_rollout_update(
         raise ValueError("PPO loss/reward nonfinite")
     if metrics["optimizer_steps"] <= 0:
         raise ValueError("PPO never updated optimizer")
-    actor_changed = not torch.equal(before["actor_mean.weight"], model.state_dict()["actor_mean.weight"])
+    actor_changed = not torch.equal(before["actor_cells.2.weight"], model.state_dict()["actor_cells.2.weight"])
     critic_changed = not torch.equal(before["critic.weight"], model.state_dict()["critic.weight"])
     if not (actor_changed and critic_changed):
         raise AssertionError("Both actor and critic must change during real-data PPO update")
