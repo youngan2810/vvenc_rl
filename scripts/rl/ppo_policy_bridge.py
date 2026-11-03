@@ -18,7 +18,7 @@ import time
 
 import torch
 
-from ppo_agent import PPOActorCritic
+from ppo_agent import MODEL_VERSION, PPOActorCritic
 
 
 def parse_observation(line: str):
@@ -77,7 +77,9 @@ def main():
     model = PPOActorCritic().eval()
     if a.checkpoint:
         ckpt = torch.load(a.checkpoint, map_location="cpu", weights_only=True)
-        model.load_state_dict(ckpt.get("model_state", ckpt))
+        if ckpt.get("model_version") != MODEL_VERSION:
+            raise ValueError("Checkpoint architecture incompatible with " + MODEL_VERSION)
+        model.load_state_dict(ckpt["model_state"], strict=True)
 
     a.action_dir.mkdir(parents=True, exist_ok=True)
     a.state_file.parent.mkdir(parents=True, exist_ok=True)
