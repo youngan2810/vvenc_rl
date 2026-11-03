@@ -13,6 +13,8 @@
 // Environment variable set: require an explicit row for every encoded POC.
 // Thread safety: the immutable map is initialized once; subsequent reads are
 // safe for VVenC's parallel CTU workers.
+// VVENC_RL_ACTION_DIR adds an online mode: Python writes one atomic action
+// file named <POC>.txt after receiving the causal pre-encode observation.
 
 #pragma once
 
@@ -25,6 +27,8 @@
 #include <stdexcept>
 #include <string>
 #include <iostream>
+#include <chrono>
+#include <thread>
 
 namespace vvenc {
 namespace rl {
@@ -52,10 +56,17 @@ public:
       throw std::runtime_error( "VVenC-RL: fixed 4x3 action map requires a 4x3 CTU grid" );
     }
 
-    const auto it = cfg.actions.find( poc );
-    if( it == cfg.actions.end() )
+    std::array<int,kElements> actions = {};
+    if( !cfg.actionDir.empty() )
     {
-      throw std::runtime_error( "VVenC-RL: missing action row for POC " + std::to_string( poc ) );
+      actions = liveActionsFor( poc, cfg.actionDir );
+    }
+    else
+    {
+      const auto it = cfg.actions.find( poc );
+      if( it == cfg.actions.end() )
+        throw std::runtime_error( "VVenC-RL: missing action row for POC " + std::to_string( poc ) );
+      actions = it->second;
     }
 
     const unsigned column = x / ctuSize;
@@ -65,7 +76,7 @@ public:
       throw std::runtime_error( "VVenC-RL: action CTU coordinates are out of range" );
     }
 
-    return it->second[row * kWidth + column];
+    return actions[row * kWidth + column];
   }
 
   static bool traceEnabled()
@@ -120,9 +131,53 @@ private:
     return mutex;
   }
 
+  static std::array<int,kElements> liveActionsFor( int poc, const std::string& directory )
+  {
+    static std::mutex cacheMutex;
+    static std::map<int,std::array<int,kElements>> cached;
+
+    {
+      std::lock_guard<std::mutex> lock( cacheMutex );
+      const auto it = cached.find( poc );
+      if( it != cached.end() ) return it->second;
+    }
+
+    const std::string path = directory + "/" + std::to_string(poc) + ".txt";
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds( 60 );
+    for( ;; )
+    {
+      std::ifstream file( path );
+      if( file.is_open() )
+      {
+        int filePoc = -1;
+        if( !(file >> filePoc) || filePoc != poc )
+          throw std::runtime_error("VVenC-RL: action file POC mismatch: " + path);
+
+        std::array<int,kElements> action = {};
+        for( int i = 0; i < kElements; ++i )
+        {
+          if( !(file >> action[i]) || action[i] < -2 || action[i] > 2 )
+            throw std::runtime_error("VVenC-RL: malformed live QP map: " + path);
+        }
+        std::string extra;
+        if( file >> extra )
+          throw std::runtime_error("VVenC-RL: extra data in live QP map: " + path);
+        std::lock_guard<std::mutex> lock( cacheMutex );
+        const auto inserted = cached.emplace( poc, action );
+        return inserted.first->second;
+      }
+
+      if( std::chrono::steady_clock::now() >= deadline )
+        throw std::runtime_error("VVenC-RL: timed out waiting for PPO action: " + path);
+
+      std::this_thread::sleep_for( std::chrono::milliseconds( 20 ) );
+    }
+  }
+
   struct Config
   {
     bool enabled = false;
+    std::string actionDir;
     std::map<int, std::array<int, kElements>> actions;
   };
 
@@ -131,7 +186,20 @@ private:
     static const Config cfg = []() {
       Config result;
       const char* path = std::getenv( "VVENC_RL_QP_MAP" );
-      if( path == nullptr || path[0] == '\0' ) return result;
+      const char* liveDir = std::getenv( "VVENC_RL_ACTION_DIR" );
+      const bool hasMap = path != nullptr && path[0] != '\0';
+      const bool hasLiveDir = liveDir != nullptr && liveDir[0] != '\0';
+      if( hasMap && hasLiveDir )
+        throw std::runtime_error( "VVenC-RL: choose only one of VVENC_RL_QP_MAP and VVENC_RL_ACTION_DIR" );
+      if( hasLiveDir )
+      {
+        if( std::getenv("VVENC_RL_STATE_FILE") == nullptr )
+          throw std::runtime_error("VVenC-RL: live actions require VVENC_RL_STATE_FILE");
+        result.enabled = true;
+        result.actionDir = liveDir;
+        return result;
+      }
+      if( !hasMap ) return result;
 
       std::ifstream file( path );
       if( !file.is_open() )
