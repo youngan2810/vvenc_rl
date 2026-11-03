@@ -171,7 +171,7 @@ def dataset_source(records: dict, vid: str):
     raise FileNotFoundError("Locked Train MOV not present in Kaggle Add Input: " + rel)
 
 
-def preprocess_mov(source: Path, output: Path, frames: int, log: Path):
+def preprocess_mov(source: Path, output: Path, frames: int, log: Path, start_frame: int = 0):
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=codec_name,avg_frame_rate,nb_frames,"
@@ -204,7 +204,12 @@ def preprocess_mov(source: Path, output: Path, frames: int, log: Path):
         f"irange={colour['range']}:space=bt709:primaries=bt709:"
         "trc=bt709:range=tv:format=yuv420p"
     )
-    vf = f"fps={FPS},{cs},scale={W}:{H}:flags=bicubic,format=yuv420p"
+    if start_frame < 0:
+        raise ValueError("start_frame must be nonnegative")
+    # Seek by frame count AFTER deterministic 30fps conversion, not by
+    # compressed MOV keyframes; the episode has a fresh GOP/RC reset.
+    vf = (f"fps={FPS},trim=start_frame={start_frame},setpts=PTS-STARTPTS,"
+          f"{cs},scale={W}:{H}:flags=bicubic,format=yuv420p")
     run_cmd(
         ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
          "-i", str(source), "-an", "-sn", "-vf", vf, "-pix_fmt", "yuv420p",
@@ -221,6 +226,7 @@ def preprocess_mov(source: Path, output: Path, frames: int, log: Path):
 def encode_with_ppo(
     repo: Path, encoder: Path, source_yuv: Path, out: Path, frames: int,
     policy_checkpoint: Path | None = None, policy_seed: int = 7,
+    bitrate_kbps: int = BITRATE_KBPS, deterministic: bool = False,
 ):
     import torch
     out.mkdir(parents=True, exist_ok=False)
@@ -238,6 +244,8 @@ def encode_with_ppo(
     ]
     if policy_checkpoint is not None:
         bridge_cmd.extend(["--checkpoint", str(policy_checkpoint)])
+    if deterministic:
+        bridge_cmd.append("--deterministic")
     bridge = subprocess.Popen(bridge_cmd, stdout=bridge_log, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 60
@@ -260,7 +268,7 @@ def encode_with_ppo(
             str(encoder), "-i", str(source_yuv), "-s", f"{W}x{H}",
             "-r", str(FPS), "-f", str(frames), "-c", "yuv420",
             "--preset", "medium", "--internal-bitdepth", "10",
-            "--bitrate", f"{BITRATE_KBPS}k", "--passes", "1", "--qpa", "1",
+            "--bitrate", f"{bitrate_kbps}k", "--passes", "1", "--qpa", "1",
             "--intraperiod", "32", "--refreshtype", "cra",
             "--sdr", "sdr_709", "--threads", "4", "--mtprofile", "-1",
             "--additional", "GOPSize=32:LookAhead=1", "-o", str(stream),
@@ -274,7 +282,8 @@ def encode_with_ppo(
             records = [json.loads(s) for s in f if s.strip()]
         assert len(records) == frames and len({r["poc"] for r in records}) == frames
         assert {r["poc"] for r in records} == set(range(frames))
-        assert any(any(v != 0 for v in r["discrete_action"]) for r in records), "PPO produced zero actions only"
+        if not deterministic:
+            assert any(any(v != 0 for v in r["discrete_action"]) for r in records), "PPO produced zero actions only"
         assert au[-1].cumulative_bits == stream.stat().st_size * 8
         return stream, records, au
     finally:
@@ -460,6 +469,12 @@ def main():
     parser.add_argument("--encoder", type=Path)
     parser.add_argument("--decoder", type=Path, required=True)
     parser.add_argument("--frames", type=int, default=64)
+    parser.add_argument("--start-frame", type=int, default=0,
+                        help="Frame offset after converting MOV to 30 fps")
+    parser.add_argument("--bitrate-kbps", type=int, choices=(50, 80, 120, 160, 200),
+                        default=120)
+    parser.add_argument("--deterministic", action="store_true",
+                        help="No sampling noise; use only for validation")
     parser.add_argument("--train-index", type=int, default=0)
     parser.add_argument("--beta", type=float, default=0.1,
                         help="Pilot only; beta must later be chosen on Validation")
@@ -471,7 +486,9 @@ def main():
     args = parser.parse_args()
 
     if args.frames < 32 or args.frames > 512:
-        parser.error("Pilot frames must be between 32 and 512")
+        parser.error("Episode frames must be between 32 and 512")
+    if args.start_frame < 0:
+        parser.error("--start-frame must be nonnegative")
     if not 0 <= args.train_index < 65:
         parser.error("Train index must be in [0,64]")
     if args.out.exists():
@@ -498,11 +515,13 @@ def main():
     args.out.mkdir(parents=True)
     source_yuv = args.out / "reference_8bit.yuv"
     preprocess = preprocess_mov(source_mov, source_yuv,
-                                args.frames, args.out / "ffmpeg_source.log")
+                                args.frames, args.out / "ffmpeg_source.log",
+                                start_frame=args.start_frame)
     stream, observations, au = encode_with_ppo(
         args.repo, args.encoder, source_yuv, args.out / "online",
         args.frames, policy_checkpoint=args.policy_checkpoint,
         policy_seed=args.policy_seed,
+        bitrate_kbps=args.bitrate_kbps, deterministic=args.deterministic,
     )
     decode = args.out / "decoded_10bit.yuv"
     run_cmd([str(args.decoder), "-b", str(stream), "-o", str(decode),
@@ -524,7 +543,7 @@ def main():
         source_detections=source_detections,
         decoded_detections=reconstructed_detections,
         frame_rate=float(FPS),
-        target_bps=BITRATE_KBPS * 1000.0,
+        target_bps=args.bitrate_kbps * 1000.0,
         beta=args.beta,
         iou_threshold=0.5,
     )
@@ -538,8 +557,8 @@ def main():
     stats = {
         "purpose": "TRAIN_ONLY_REAL_REWARD_VALIDATION_NOT_TRAINING",
         "video_id": vid, "split": "train", "train_index": args.train_index,
-        "frames": args.frames,
-        "target_kbps": BITRATE_KBPS, "actual_kbps": total_real_kbps,
+        "frames": args.frames, "start_frame": args.start_frame,
+        "target_kbps": args.bitrate_kbps, "actual_kbps": total_real_kbps,
         "bits": total_bitstream_bits,
         "au_sum_matches_stream": au[-1].cumulative_bits == total_bitstream_bits,
         "pseudo_source_boxes": cars_source,
@@ -561,6 +580,7 @@ def main():
         "policy_checkpoint": (str(args.policy_checkpoint)
                               if args.policy_checkpoint else None),
         "policy_bridge_seed": args.policy_seed,
+        "deterministic_policy": args.deterministic,
         "validation_status": ("UPDATED_POLICY_REWARD_DATA_COLLECTION"
                               if args.policy_checkpoint else
                               "UNTRAINED_POLICY_REWARD_DATA_COLLECTION"),
