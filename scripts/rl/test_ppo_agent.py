@@ -55,11 +55,11 @@ class PPOTests(unittest.TestCase):
                 done=(i % 4 == 3),
             ))
         trainer = PPOTrainer(self.model, epochs=2, minibatch_size=8)
-        before = self.model.actor_mean.weight.detach().clone()
+        before = self.model.actor_cells[-1].weight.detach().clone()
         output = trainer.update(rollout)
         self.assertTrue(math.isfinite(output["loss"]))
         self.assertGreater(output["optimizer_steps"], 0)
-        self.assertFalse(torch.equal(before, self.model.actor_mean.weight.detach()))
+        self.assertFalse(torch.equal(before, self.model.actor_cells[-1].weight.detach()))
 
     def test_rate_reward_constraints(self):
         self.assertAlmostEqual(
