@@ -26,6 +26,7 @@ from torch.distributions import Normal
 from torch.nn import functional as F
 
 
+MODEL_VERSION = "spatial-ctu-head-v2"
 SPATIAL_SHAPE = (3, 3, 4)
 GLOBAL_FEATURES = 8
 ACTION_DIM = 12
@@ -34,18 +35,25 @@ ACTION_DIM = 12
 class PPOActorCritic(nn.Module):
     def __init__(self) -> None:
         super().__init__()
+        # Preserve the 3x4 CTU geometry. Global average pooling before the
+        # Actor would largely discard which region needs a QP adjustment.
         self.spatial_encoder = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, padding=1), nn.ReLU(),
             nn.Conv2d(16, 32, kernel_size=3, padding=1), nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=3, padding=1), nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)), nn.Flatten(),
         )
         self.global_encoder = nn.Sequential(
             nn.Linear(GLOBAL_FEATURES, 64), nn.ReLU(),
             nn.Linear(64, 32), nn.ReLU(),
         )
         self.fusion = nn.Sequential(nn.Linear(64, 64), nn.Tanh())
-        self.actor_mean = nn.Linear(64, ACTION_DIM)
+        self.actor_cells = nn.Sequential(
+            nn.Conv2d(32 + 64 + 2, 32, kernel_size=1), nn.ReLU(),
+            nn.Conv2d(32, 1, kernel_size=1),
+        )
+        y, x = torch.meshgrid(torch.linspace(-1, 1, 3),
+                              torch.linspace(-1, 1, 4), indexing="ij")
+        self.register_buffer("grid_xy", torch.stack((x, y)).unsqueeze(0), persistent=False)
         self.actor_log_std = nn.Parameter(torch.full((ACTION_DIM,), -0.7))
         self.critic = nn.Linear(64, 1)
 
@@ -55,10 +63,13 @@ class PPOActorCritic(nn.Module):
         if global_.ndim != 2 or global_.shape[0] != spatial.shape[0] or global_.shape[1] != GLOBAL_FEATURES:
             raise ValueError("Expected global_ [B,8] with same batch size as spatial")
 
+        spatial_features = self.spatial_encoder(spatial)
         latent = self.fusion(torch.cat(
-            (self.spatial_encoder(spatial), self.global_encoder(global_)), dim=1
+            (spatial_features.mean(dim=(2, 3)), self.global_encoder(global_)), dim=1
         ))
-        mean = self.actor_mean(latent)
+        broadcast = latent[:, :, None, None].expand(-1, -1, 3, 4)
+        coordinates = self.grid_xy.to(dtype=spatial.dtype).expand(spatial.shape[0], -1, -1, -1)
+        mean = self.actor_cells(torch.cat((spatial_features, broadcast, coordinates), dim=1)).flatten(1)
         std = self.actor_log_std.clamp(-5.0, 1.0).exp().expand_as(mean)
         distribution = Normal(mean, std)
         value = self.critic(latent).squeeze(-1)
