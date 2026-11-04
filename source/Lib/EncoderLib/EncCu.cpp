@@ -871,12 +871,43 @@ void EncCu::xCompressCU( CodingStructure*& tempCS, CodingStructure*& bestCS, Par
                                                 (unsigned) pcv.heightInCtus );
     const int baseQp = tempCS->baseQP;
     const int appliedQp = Clip3( -sps.qpBDOffset[CH_L], MAX_QP, baseQp + delta );
+    // Capture only when explicitly requested. These arrays read existing state;
+    // no quantization, lambda, RDO or bitstream decision is changed.
+    const bool lambdaTrace = rl::QpActionMap::lambdaTraceEnabled();
+    double rdoLambdaBefore = 0.0;
+    double quantLambdaBefore[MAX_NUM_COMP] = {};
+    if( lambdaTrace )
+    {
+      rdoLambdaBefore = m_cRdCost.getLambda();
+      m_cTrQuant.getLambdas( quantLambdaBefore );
+    }
     if( appliedQp != baseQp )
     {
       tempCS->currQP[partitioner.chType] = tempCS->baseQP =
       bestCS->currQP[partitioner.chType] = bestCS->baseQP = appliedQp;
       updateLambda( slice, pic->ctuQpaLambda[ctuRsAddr],
                     pic->ctuAdaptedQP[ctuRsAddr], appliedQp, true );
+    }
+    if( lambdaTrace )
+    {
+      double quantLambdaAfter[MAX_NUM_COMP] = {};
+      double quantLambdaExpected[MAX_NUM_COMP] = {};
+      m_cTrQuant.getLambdas( quantLambdaAfter );
+      const double rdoLambdaAfter = m_cRdCost.getLambda();
+      const double corr = std::pow( 2.0,
+          double( appliedQp - pic->ctuAdaptedQP[ctuRsAddr] ) / 3.0 );
+      const double rdoLambdaExpected = appliedQp == baseQp
+          ? rdoLambdaBefore : pic->ctuQpaLambda[ctuRsAddr] * corr;
+      for( int component = 0; component < MAX_NUM_COMP; ++component )
+      {
+        quantLambdaExpected[component] = appliedQp == baseQp
+            ? quantLambdaBefore[component] : slice.getLambdas()[component] * corr;
+      }
+      rl::QpActionMap::traceLambda( slice.poc, (unsigned) ctuRsAddr,
+          baseQp, delta, appliedQp, pic->ctuAdaptedQP[ctuRsAddr],
+          pic->ctuQpaLambda[ctuRsAddr],
+          rdoLambdaBefore, rdoLambdaAfter, rdoLambdaExpected,
+          quantLambdaBefore, quantLambdaAfter, quantLambdaExpected );
     }
     rl::QpActionMap::trace( slice.poc, (unsigned) partitioner.currQgPos.x,
                             (unsigned) partitioner.currQgPos.y, baseQp, delta, appliedQp,
