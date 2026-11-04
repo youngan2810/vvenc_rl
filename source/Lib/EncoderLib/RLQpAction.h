@@ -120,6 +120,7 @@ public:
                            int qpBase, int requestedDelta, int qpApplied,
                            int qpQpa, double lambdaQpa,
                            double rdoBefore, double rdoAfter, double rdoExpected,
+                           const double* quantReference,
                            const double* quantBefore, const double* quantAfter,
                            const double* quantExpected )
   {
@@ -139,7 +140,8 @@ public:
     for( int i = 0; i < 3; ++i )
     {
       static const char* labels[3] = { "y", "cb", "cr" };
-      line << " quant_" << labels[i] << "_before=" << quantBefore[i]
+      line << " quant_" << labels[i] << "_reference=" << quantReference[i]
+           << " quant_" << labels[i] << "_before=" << quantBefore[i]
            << " quant_" << labels[i] << "_after=" << quantAfter[i]
            << " quant_" << labels[i] << "_expected=" << quantExpected[i];
     }
