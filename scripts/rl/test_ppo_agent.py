@@ -71,6 +71,22 @@ class PPOTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             rate_f1_reward(1.5, 100, 120000, 1.0, 0.5)
 
+    def test_kl_stop_does_not_apply_another_optimizer_step(self):
+        sp, gl = self.spatial[:1], self.global_[:1]
+        with torch.no_grad():
+            raw, _, lp, val = self.model.sample(sp, gl)
+        # Simulate a policy already far from its collector. No gradient is
+        # allowed on this minibatch, unlike the previous post-step check.
+        row = Transition(sp[0], gl[0], raw[0], float(lp[0])+1.0,
+                         .5, float(val[0]), 0., True)
+        before = {k: v.clone() for k, v in self.model.state_dict().items()}
+        report = PPOTrainer(self.model).update([row])
+        self.assertEqual(report['optimizer_steps'], 0)
+        self.assertEqual(report['early_stop'], 1)
+        self.assertGreater(report['stop_kl'], .03)
+        self.assertTrue(all(torch.equal(v, self.model.state_dict()[k]) for k, v in before.items()))
+
 
 if __name__ == "__main__":
     unittest.main()
+

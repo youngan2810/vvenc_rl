@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from full_train import (RATES, create_schedule, choose_window, atomic_checkpoint,
                         checkpoint_bundle, load_trainer, train_checkpoint,
                         atomic_json, TRAINING_SCHEMA)
-from ppo_agent import PPOActorCritic, PPOTrainer, MODEL_VERSION
+from ppo_agent import PPOActorCritic, PPOTrainer, MODEL_VERSION, Transition
 
 
 class FullTrainingTests(unittest.TestCase):
@@ -67,6 +67,33 @@ class FullTrainingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_trainer(ckpt, {"different": True}, "lock")
 
+    def test_resume_matches_uninterrupted_seeded_update(self):
+        torch.manual_seed(17)
+        model = PPOActorCritic()
+        trainer = PPOTrainer(model, learning_rate=1e-4, epochs=2, minibatch_size=8)
+        def collect():
+            rows = []
+            for i in range(16):
+                sp, gl = torch.rand(1,3,3,4), torch.rand(1,8)
+                with torch.no_grad():
+                    raw, _, lp, val = model.sample(sp, gl)
+                rows.append(Transition(sp[0], gl[0], raw[0], float(lp[0]),
+                                       .2 + i/50, float(val[0]), 0., i == 15))
+            return rows
+        trainer.update(collect())
+        with TemporaryDirectory() as folder:
+            path = Path(folder)/'resume.pt'; cfg = {'source_commit': 'test-source'}
+            atomic_checkpoint(path, train_checkpoint(model, trainer, 1, cfg, 'lock', {}))
+            state, restored, other = load_trainer(path, cfg, 'lock')
+            self.assertEqual(state['source_commit'], 'test-source')
+            self.assertEqual(other.hyperparameters(), trainer.hyperparameters())
+            rollout = collect()
+            torch.manual_seed(123); first = trainer.update(rollout)
+            torch.manual_seed(123); second = other.update(rollout)
+            self.assertEqual(first, second)
+            self.assertTrue(all(torch.equal(v, restored.state_dict()[k]) for k,v in model.state_dict().items()))
+
 
 if __name__ == "__main__":
     unittest.main()
+

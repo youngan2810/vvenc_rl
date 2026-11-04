@@ -513,28 +513,42 @@ def main():
     source_mov = dataset_source(records, vid)
 
     args.out.mkdir(parents=True)
+    timings = {}
+    phase_start = time.monotonic()
     source_yuv = args.out / "reference_8bit.yuv"
     preprocess = preprocess_mov(source_mov, source_yuv,
                                 args.frames, args.out / "ffmpeg_source.log",
                                 start_frame=args.start_frame)
+    timings["preprocess_seconds"] = time.monotonic() - phase_start
+    phase_start = time.monotonic()
     stream, observations, au = encode_with_ppo(
         args.repo, args.encoder, source_yuv, args.out / "online",
         args.frames, policy_checkpoint=args.policy_checkpoint,
         policy_seed=args.policy_seed,
         bitrate_kbps=args.bitrate_kbps, deterministic=args.deterministic,
     )
+    timings["encode_and_policy_seconds"] = time.monotonic() - phase_start
+    phase_start = time.monotonic()
     decode = args.out / "decoded_10bit.yuv"
     run_cmd([str(args.decoder), "-b", str(stream), "-o", str(decode),
              "--threads", "4"], args.out / "decoder.log", timeout=600)
     rec8 = args.out / "decoded_8bit.yuv"
     convert_10bit_to_8bit(decode, rec8, args.frames)
     alignment = temporal_alignment_check(source_yuv, decode, args.frames)
+    timings["decode_convert_alignment_seconds"] = time.monotonic() - phase_start
 
+    phase_start = time.monotonic()
     detector, provenance = load_frozen_yolov5(args.repo, lock)
+    timings["detector_load_seconds"] = time.monotonic() - phase_start
     source_detections = args.out / "source_detections.jsonl"
     reconstructed_detections = args.out / "decoded_detections.jsonl"
+    phase_start = time.monotonic()
     cars_source = detect_all(detector, source_yuv, args.frames, vid, source_detections)
+    timings["reference_detection_seconds"] = time.monotonic() - phase_start
+    phase_start = time.monotonic()
     cars_reconstructed = detect_all(detector, rec8, args.frames, vid, reconstructed_detections)
+    timings["decoded_detection_seconds"] = time.monotonic() - phase_start
+    phase_start = time.monotonic()
     joined = join_episode(
         video_id=vid,
         trajectory_file=args.out / "online" / "trajectory.jsonl",
@@ -554,6 +568,8 @@ def main():
 
     total_bitstream_bits = stream.stat().st_size * 8
     total_real_kbps = total_bitstream_bits * FPS / args.frames / 1000.0
+    timings["reward_join_seconds"] = time.monotonic() - phase_start
+    action_values = [int(a) for row in joined for a in row["discrete_action"]]
     stats = {
         "purpose": "TRAIN_ONLY_REAL_REWARD_VALIDATION_NOT_TRAINING",
         "video_id": vid, "split": "train", "train_index": args.train_index,
@@ -565,6 +581,9 @@ def main():
         "decoded_boxes": cars_reconstructed,
         "mean_f1_reward_term": sum(r["reward_diagnostics"]["detection_term"] for r in joined)/len(joined),
         "mean_reward": sum(r["reward"] for r in joined)/len(joined),
+        "mean_rate_penalty": sum(r["reward_diagnostics"]["detection_term"] - r["reward"] for r in joined)/len(joined),
+        "delta_qp_histogram": {str(a): action_values.count(a) for a in range(-2, 3)},
+        "timings": timings,
         "total_tp": sum(r["reward_diagnostics"]["counts"]["tp"] for r in joined),
         "total_fp": sum(r["reward_diagnostics"]["counts"]["fp"] for r in joined),
         "total_fn": sum(r["reward_diagnostics"]["counts"]["fn"] for r in joined),
@@ -606,3 +625,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

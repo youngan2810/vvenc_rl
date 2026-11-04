@@ -1,3 +1,15 @@
+# Official dual-GPU training
+
+Use [README_TRAINING.md](README_TRAINING.md) and the repository-owned
+`scripts/rl/full_train_dual_gpu.py` for the current restartable training entry
+point. Older pilot examples below remain integration diagnostics. Kaggle should
+invoke the checked-out source, not embed or rewrite training modules.
+
+The sections below contain historical development notes; their stage/status
+statements describe earlier revisions. Follow README_TRAINING.md for this revision.
+
+---
+
 # VVenC RL Agent development branch (`rl-agent-dev`)
 
 ## Status and scientific reproducibility
@@ -512,3 +524,5 @@ truth from human annotation. Each encoded/reconstructed frame yields a
 post-encode detection F1 and actual bits; the initial reward is:
 `r_t = F1_t - beta * abs(log(R_cum,t / R_target))`.
 Do not call this mAP against annotated GT. Do not optimize on Test.
+
+

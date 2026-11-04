@@ -27,6 +27,7 @@ from torch.nn import functional as F
 
 
 MODEL_VERSION = "spatial-ctu-head-v2"
+PPO_UPDATE_VERSION = "clip-kl-precheck-v2"
 SPATIAL_SHAPE = (3, 3, 4)
 GLOBAL_FEATURES = 8
 ACTION_DIM = 12
@@ -163,6 +164,12 @@ class PPOTrainer:
         self.entropy_coef = entropy_coef
         self.max_grad_norm = max_grad_norm
 
+    def hyperparameters(self) -> dict:
+        return {"learning_rate": self.optimizer.param_groups[0]["lr"],
+                **{name: getattr(self, name) for name in (
+                    "gamma", "gae_lambda", "clip_eps", "epochs", "minibatch_size",
+                    "target_kl", "value_coef", "entropy_coef", "max_grad_norm")}}
+
     def update(self, rollout: List[Transition]) -> Dict[str, float]:
         if not rollout:
             raise ValueError("PPO update requires a non-empty rollout")
@@ -184,6 +191,7 @@ class PPOTrainer:
 
         losses = []
         kls = []
+        policy_losses, value_losses, entropies, clip_fractions = [], [], [], []
         optimizer_steps = 0
         early_stop = False
         for _ in range(self.epochs):
@@ -192,6 +200,16 @@ class PPOTrainer:
                     sp[indices], gl[indices], raw[indices]
                 )
                 ratio = torch.exp(new_logp - logp_old[indices])
+                # Inspect the current policy BEFORE another optimizer step.
+                # Keep the existing signed KL estimator; log its stop value
+                # separately from its average (which can be slightly negative).
+                approx_kl = float((logp_old[indices] - new_logp.detach()).mean().cpu())
+                if not math.isfinite(approx_kl) or not torch.isfinite(ratio).all():
+                    raise FloatingPointError("Non-finite PPO probability ratio/KL")
+                kls.append(approx_kl)
+                if approx_kl > self.target_kl:
+                    early_stop = True
+                    break
                 objective = torch.minimum(
                     ratio * advantage[indices],
                     torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantage[indices],
@@ -207,20 +225,28 @@ class PPOTrainer:
                     raise FloatingPointError("Non-finite PPO loss")
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm,
+                                         error_if_nonfinite=True)
                 self.optimizer.step()
+                if not all(torch.isfinite(p).all() for p in self.model.parameters()):
+                    raise FloatingPointError("Non-finite PPO parameters after update")
                 optimizer_steps += 1
                 losses.append(float(loss.detach().cpu()))
-                approx_kl = float((logp_old[indices] - new_logp.detach()).mean().cpu())
-                kls.append(approx_kl)
-                if approx_kl > self.target_kl:
-                    early_stop = True
-                    break
+                policy_losses.append(float(policy_loss.detach().cpu()))
+                value_losses.append(float(value_loss.detach().cpu()))
+                entropies.append(float(entropy.detach().mean().cpu()))
+                clip_fractions.append(float(((ratio.detach()-1).abs() > self.clip_eps).float().mean().cpu()))
             if early_stop:
                 break
         return {
-            "loss": sum(losses) / len(losses),
+            "loss": sum(losses) / max(1, len(losses)),
             "approx_kl": sum(kls) / len(kls),
+            "max_minibatch_kl": max(kls),
+            "stop_kl": kls[-1] if early_stop else 0.0,
+            "policy_loss": sum(policy_losses) / max(1, len(policy_losses)),
+            "value_loss": sum(value_losses) / max(1, len(value_losses)),
+            "entropy": sum(entropies) / max(1, len(entropies)),
+            "clip_fraction": sum(clip_fractions) / max(1, len(clip_fractions)),
             "optimizer_steps": float(optimizer_steps),
             "early_stop": float(early_stop),
             "mean_reward": float(rewards.mean().cpu()),
@@ -247,3 +273,4 @@ __all__ = [
     "PPOActorCritic", "PPOTrainer", "Transition", "compute_gae",
     "rate_f1_reward", "SPATIAL_SHAPE", "GLOBAL_FEATURES", "ACTION_DIM",
 ]
+

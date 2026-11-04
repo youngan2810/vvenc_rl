@@ -65,6 +65,34 @@ def checkpoint_bundle(root: Path, progress: dict) -> Path:
             z.write(best, arcname="checkpoint/best_validation.pt")
         if (root / "latest_validation.json").is_file():
             z.write(root / "latest_validation.json", arcname="latest_validation.json")
+        # Epoch-end weights must survive session export, including pending Val.
+        for update in progress.get("updates", []):
+            if update["episode_steps"][-1] % 325 == 0 and "checkpoint_path" in update:
+                path = root / update["checkpoint_path"]
+                if sha256_file(path) != update["checkpoint_sha256"]:
+                    raise RuntimeError("Epoch checkpoint checksum mismatch")
+                z.write(path, arcname=path.relative_to(root).as_posix())
+        evidence = set(root.glob("*.log"))
+        evidence.update(root.glob("validation_epoch_*/validation_summary.json"))
+        for row in progress.get("completed", []):
+            episode = root / row["episode_dir"]
+            for name in ("summary.json", "online/au_bits.csv"):
+                path = episode / name
+                if path.is_file():
+                    evidence.add(path)
+        # Keep the latest update independently auditable without exporting all
+        # raw rollouts from all epochs. Local episode folders retain all logs.
+        latest_steps = set(progress.get("updates", [{}])[-1].get("episode_steps", [])) if progress.get("updates") else set()
+        for row in progress.get("completed", []):
+            if row["step"] in latest_steps:
+                episode = root / row["episode_dir"]
+                for pattern in ("*.jsonl", "*.log", "online/*.jsonl", "online/*.log", "online/states.txt"):
+                    evidence.update(episode.glob(pattern))
+        # Preserve evidence already restored from an earlier compact bundle.
+        evidence.update(root.glob("episodes/*/summary.json"))
+        for path in sorted(evidence):
+            if path.is_file() and not path.is_symlink():
+                z.write(path, arcname=path.relative_to(root).as_posix())
     os.replace(tmp, dest)
     return dest
 
@@ -115,7 +143,8 @@ def train_checkpoint(model: PPOActorCritic, trainer: PPOTrainer, iteration: int,
         "ppo_iteration": iteration,
         "training_config": config,
         "baseline_lock_sha256": locksha,
-        "source_commit": SOURCE_COMMIT,
+        "source_commit": config.get("source_commit", SOURCE_COMMIT),
+        "ppo_hparams": trainer.hyperparameters(),
         "metrics": metrics,
         "torch_rng_state": torch.get_rng_state(),
         "numpy_rng_state": (np.random.get_state()[0],
@@ -136,7 +165,7 @@ def load_trainer(checkpoint: Path, expected_config: dict, locksha: str):
         raise ValueError("Incompatible training checkpoint; do not mix architectures or plans")
     model = PPOActorCritic()
     model.load_state_dict(obj["model_state"], strict=True)
-    trainer = PPOTrainer(model, epochs=5, minibatch_size=64)
+    trainer = PPOTrainer(model, **obj.get("ppo_hparams", {"epochs": 5, "minibatch_size": 64}))
     trainer.optimizer.load_state_dict(obj["optimizer_state"])
     return obj, model, trainer
 
@@ -314,3 +343,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
