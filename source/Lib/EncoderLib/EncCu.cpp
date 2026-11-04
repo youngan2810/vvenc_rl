@@ -907,7 +907,7 @@ void EncCu::xCompressCU( CodingStructure*& tempCS, CodingStructure*& bestCS, Par
           baseQp, delta, appliedQp, pic->ctuAdaptedQP[ctuRsAddr],
           pic->ctuQpaLambda[ctuRsAddr],
           rdoLambdaBefore, rdoLambdaAfter, rdoLambdaExpected,
-          quantLambdaBefore, quantLambdaAfter, quantLambdaExpected );
+          slice.getLambdas(), quantLambdaBefore, quantLambdaAfter, quantLambdaExpected );
     }
     rl::QpActionMap::trace( slice.poc, (unsigned) partitioner.currQgPos.x,
                             (unsigned) partitioner.currQgPos.y, baseQp, delta, appliedQp,
