@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <iostream>
+#include <iomanip>
 #include <chrono>
 #include <thread>
 
@@ -104,6 +105,46 @@ public:
               << " depth=" << currDepth
               << " cu_w=" << cuWidth
               << " cu_h=" << cuHeight << '\n';
+  }
+
+
+  // Read-only diagnostics of the *actual* RDO and transform-quantization lambdas.
+  // Enabled only for short pre-training verification runs.
+  static bool lambdaTraceEnabled()
+  {
+    const char* flag = std::getenv( "VVENC_RL_LAMBDA_TRACE" );
+    return flag != nullptr && flag[0] == '1';
+  }
+
+  static void traceLambda( int poc, unsigned ctuAddr,
+                           int qpBase, int requestedDelta, int qpApplied,
+                           int qpQpa, double lambdaQpa,
+                           double rdoBefore, double rdoAfter, double rdoExpected,
+                           const double* quantBefore, const double* quantAfter,
+                           const double* quantExpected )
+  {
+    if( !lambdaTraceEnabled() ) return;
+    std::ostringstream line;
+    line << std::setprecision(17)
+         << "[VVENC_RL_LAMBDA] poc=" << poc
+         << " ctu=" << ctuAddr
+         << " qp_base=" << qpBase
+         << " delta_requested=" << requestedDelta
+         << " qp_applied=" << qpApplied
+         << " qp_qpa=" << qpQpa
+         << " lambda_qpa=" << lambdaQpa
+         << " lambda_rdo_before=" << rdoBefore
+         << " lambda_rdo_after=" << rdoAfter
+         << " lambda_rdo_expected=" << rdoExpected;
+    for( int i = 0; i < 3; ++i )
+    {
+      static const char* labels[3] = { "y", "cb", "cr" };
+      line << " quant_" << labels[i] << "_before=" << quantBefore[i]
+           << " quant_" << labels[i] << "_after=" << quantAfter[i]
+           << " quant_" << labels[i] << "_expected=" << quantExpected[i];
+    }
+    std::lock_guard<std::mutex> lock( traceMutex() );
+    std::cerr << line.str() << '\n';
   }
 
   // Recorded after the winning CU tree for this CTU has been selected.
