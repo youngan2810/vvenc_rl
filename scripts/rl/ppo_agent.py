@@ -27,10 +27,21 @@ from torch.nn import functional as F
 
 
 MODEL_VERSION = "spatial-ctu-head-v2"
-PPO_UPDATE_VERSION = "clip-kl-precheck-v2"
+PPO_UPDATE_VERSION = "clip-kl-k3-precheck-v3"
 SPATIAL_SHAPE = (3, 3, 4)
 GLOBAL_FEATURES = 8
 ACTION_DIM = 12
+
+
+def estimate_kl(log_ratio: Tensor) -> Tuple[Tensor, Tensor]:
+    """Old-policy samples: nonnegative k3 and signed k1, for diagnostics only.
+
+    expm1(x)-x avoids subtracting nearly equal 1+x and 1 near zero. The
+    nonnegative estimate is a sampling heuristic, not an exact KL bound.
+    Detaching here must not detach the ratio used in the policy objective.
+    """
+    x = log_ratio.detach()
+    return (torch.expm1(x) - x).clamp_min(0).mean(), -x.mean()
 
 
 class PPOActorCritic(nn.Module):
@@ -190,7 +201,7 @@ class PPOTrainer:
             advantage = (advantage - advantage.mean()) / (advantage.std(unbiased=False) + 1e-8)
 
         losses = []
-        kls = []
+        kls, signed_kls = [], []
         policy_losses, value_losses, entropies, clip_fractions = [], [], [], []
         optimizer_steps = 0
         early_stop = False
@@ -199,14 +210,14 @@ class PPOTrainer:
                 new_logp, entropy, new_values = self.model.evaluate(
                     sp[indices], gl[indices], raw[indices]
                 )
-                ratio = torch.exp(new_logp - logp_old[indices])
-                # Inspect the current policy BEFORE another optimizer step.
-                # Keep the existing signed KL estimator; log its stop value
-                # separately from its average (which can be slightly negative).
-                approx_kl = float((logp_old[indices] - new_logp.detach()).mean().cpu())
+                log_ratio = new_logp - logp_old[indices]
+                ratio = torch.exp(log_ratio)  # keep gradients for actor learning
+                kl_k3, kl_signed = estimate_kl(log_ratio)
+                approx_kl = float(kl_k3.cpu())
                 if not math.isfinite(approx_kl) or not torch.isfinite(ratio).all():
                     raise FloatingPointError("Non-finite PPO probability ratio/KL")
                 kls.append(approx_kl)
+                signed_kls.append(float(kl_signed.cpu()))
                 if approx_kl > self.target_kl:
                     early_stop = True
                     break
@@ -241,8 +252,10 @@ class PPOTrainer:
         return {
             "loss": sum(losses) / max(1, len(losses)),
             "approx_kl": sum(kls) / len(kls),
+            "approx_kl_signed": sum(signed_kls) / len(signed_kls),
             "max_minibatch_kl": max(kls),
             "stop_kl": kls[-1] if early_stop else 0.0,
+            "stop_kl_signed": signed_kls[-1] if early_stop else 0.0,
             "policy_loss": sum(policy_losses) / max(1, len(policy_losses)),
             "value_loss": sum(value_losses) / max(1, len(value_losses)),
             "entropy": sum(entropies) / max(1, len(entropies)),
@@ -273,4 +286,5 @@ __all__ = [
     "PPOActorCritic", "PPOTrainer", "Transition", "compute_gae",
     "rate_f1_reward", "SPATIAL_SHAPE", "GLOBAL_FEATURES", "ACTION_DIM",
 ]
+
 

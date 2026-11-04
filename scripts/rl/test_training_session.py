@@ -21,7 +21,7 @@ class SessionTests(TestCase):
         (root / 'checkpoints').mkdir()
         checkpoint = root / 'checkpoints/epoch.pt'
         checkpoint.write_bytes(b'epoch end weights')
-        progress = {'training_config': {'session_version': 2}, 'locksha': 'lock',
+        progress = {'training_config': {'session_version': 3}, 'locksha': 'lock',
                     'completed': [{'step': i+1, 'episode_dir': f'episodes/{i+1}'} for i in range(325)],
                     'validations': [], 'updates': [{'episode_steps': [325],
                       'checkpoint_path': 'checkpoints/epoch.pt', 'checkpoint_sha256': digest(checkpoint)}],
@@ -37,6 +37,7 @@ class SessionTests(TestCase):
                 'no_optimizer_update': True, 'frames_per_sample': 256, 'beta': .1,
                 'checkpoint_sha256': progress['latest_sha256'], 'baseline_lock_sha256': 'lock',
                 'macro_ppo_score': .7, 'macro_vanilla_score': .6,
+                'encoder_threads': 4, 'decoder_threads': 4,
                 'pairs': [{'val_index': i, 'target_kbps': r} for i in range(7) for r in RATES]}
 
     def test_failed_validation_is_retried_before_next_epoch_without_deletion(self):
@@ -140,3 +141,4 @@ class SessionTests(TestCase):
 
 
 if __name__ == '__main__': main()
+

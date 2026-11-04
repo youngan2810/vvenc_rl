@@ -22,7 +22,9 @@ Training code must not be embedded or rewritten inside a notebook.
 | `scripts/rl/reward_join.py`, `reward_metrics.py` | Align data by video/POC and compute detection/rate rewards |
 | `scripts/rl/full_train_dual_gpu.py` | Current two-collector training entry point |
 | `scripts/rl/training_session.py` | Resume, archive restore and missing epoch validation |
-| `scripts/rl/full_validate.py` | Paired vanilla/PPO validation without learning |
+| `scripts/rl/full_validate.py`, `validation_session.py` | Paired validation and portable video-rate resume |
+| `scripts/rl/benchmark_cpu_threads.py` | Fixed-policy two-worker 2/2 vs 4/4 thread benchmark |
+| `scripts/rl/export_training_results.py` | Analysis archive, separate from resume state |
 | `scripts/rl/test_*.py` | CPU unit and integration tests |
 
 The spatial observation has shape `[3, 3, 4]`; the global vector has eight
@@ -66,7 +68,7 @@ platforms and general encoder options.
 - Paired deterministic Validation uses 7 Val videos x 5 rates at every epoch end.
   The 100-video Test set is not used for training or checkpoint selection.
 
-This revision changes KL stop ordering and versions the session protocol. Start
+This revision uses the nonnegative k3 KL stop estimator and session protocol v3. Start
 a **new official experiment**; keep the older 22-episode benchmark as historical
 evidence. Its archive is intentionally rejected for continuation by this runner.
 Freeze this source commit for every session of the new experiment.
@@ -93,7 +95,8 @@ python -u scripts/rl/full_train_dual_gpu.py \
   --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
   --output /kaggle/working/ppo_qp_official \
   --epochs 3 --frames 256 --seed 20261103 --beta 0.1 \
-  --run-validation --validation-frames 256 --max-episodes 2
+  --run-validation --validation-frames 256 --max-episodes 2 \
+  --encoder-threads 4 --decoder-threads 4 --export-analysis
 ```
 
 Use `--max-episodes 100` for bounded sessions after checking the smoke output.
@@ -113,7 +116,7 @@ fresh output directory, and add:
 ```
 
 The source restores weights, optimizer, progress, epoch-end checkpoints and
-available evidence. The source commit, runner checksum, model/update versions,
+pair-level validation progress. The source commit, runner checksum, model/update versions,
 dataset lock and training/validation configuration must match. Random policy
 sampling and PPO minibatch permutations use deterministic per-episode/per-update
 seeds, including on resume. Saved RNG states are supplementary; recovery does
@@ -123,43 +126,87 @@ Progress is committed only after fresh collection and successful checkpoint
 creation. Interrupted episode/checkpoint attempts are retained under their old
 names; retries use a new name. No partial rollout is reused for an update.
 On startup, any completed epoch with missing Validation is processed before new
-collection. A completed matching validation summary is reused; incomplete Val
-is rerun in a new directory. This recovery is at epoch level, not at each Val pair.
+collection. Each completed video-rate pair is committed atomically and the compact
+ZIP is refreshed before the next pair. Resume skips completed pairs and reruns an
+interrupted pair from the beginning. Only videos with pending rates need new
+reference YUV/detections. An incomplete legacy directory without pair progress is
+retained and retried under a new name. Checkpoint, protocol, codec binary hashes
+and thread counts must match; completed matching summaries are reused.
 
 ## Evidence and diagnostics
 
-The compact ZIP is a resume bundle, not the complete experiment archive. It saves:
+Two archives have different purposes:
 
-- latest model and optimizer; epoch-end checkpoints; best validation checkpoint;
-- progress with checkpoint chain, policy-parity errors, reward components,
-  detection counts, action histogram and phase timings;
-- episode summaries and access-unit bit counts; parent/collector logs;
-- detailed rollouts, detections and bridge logs for the latest PPO update;
-- available validation summaries.
+- `PPO_QP_FULL_TRAIN_LATEST.zip`: latest model/optimizer, epoch-end and best
+  checkpoints, training progress/metrics, validation progress and summaries.
+  Refreshed atomically after each PPO update and each completed validation pair.
+  It contains no accumulated episode logs, trajectories, detections or YUV files.
+- `PPO_QP_ANALYSIS.zip`: JSON/JSONL/CSV/log/text evidence currently present in
+  the run directory. Export once at a session boundary with `--export-analysis`,
+  or run `python scripts/rl/export_training_results.py --run-dir RUN_DIRECTORY`.
+  It excludes model weights, action exchange files, YUVs and bitstreams.
 
-All episode details remain in the live run directory. Export that directory
-separately if every historical trajectory/detection file is needed. Large YUVs
-and bitstreams are cleaned by default; existing keep flags control that behavior.
+Download **both archives after each session**. Compact restore does not recreate
+historical detailed logs; retain previous sessions' analysis archives separately.
+Training progress still carries cumulative episode/update metrics. Large YUVs
+and bitstreams follow the existing cleanup/keep options.
 
-PPO logs separate policy loss, value loss, Gaussian entropy proxy, clip fraction,
-average KL, maximum minibatch KL and the KL that triggered stopping. KL is checked
-before taking another optimizer step, using the existing signed sampled estimator;
-it is a stopping heuristic, not an exact trust-region bound. A negative average
-estimate alone is not a failure. Never raise target KL merely to disable stopping.
+PPO checks KL before the next optimizer step. With
+`x = new_logp.detach() - old_logp`, `approx_kl` is
+`mean(expm1(x) - x)` (k3, clamped at zero for floating-point roundoff).
+`approx_kl_signed` retains `mean(-x)` (k1) for comparison. Stop diagnostics include
+`max_minibatch_kl`, `stop_kl` and `stop_kl_signed`. The probability ratio used by
+the PPO loss is **not detached**. Policy/value loss, entropy proxy, clip fraction
+and optimizer-step counts are also logged.
+
+The k3 estimate is nonnegative per sample but remains a sampled stopping
+heuristic, not an exact trust-region bound or a guarantee of lower variance in
+every regime. The default target KL remains 0.03; inspect both estimators and
+optimizer-step counts in a new pilot rather than raising the threshold just to
+suppress stopping. A zero delta-QP map is a valid action and is accepted.
 
 Timings distinguish preprocessing, encoding/policy exchange, decoding/alignment,
 detector loading, reference detection, decoded detection and reward joining.
 Profile these before changing worker count, CPU threads or model batching.
 
+## CPU thread benchmark
+
+`--encoder-threads` and `--decoder-threads` default to 4/4 and propagate to every
+collector and paired validation encode/decode. Counts are part of the frozen
+experiment configuration; changing them requires a new run. The historical
+baseline used 4/4, so 2/2 is a benchmark candidate, not a new accepted anchor.
+
+After obtaining a smoke checkpoint, compare two concurrent collectors with the
+same frozen policy, video windows and paired seeds, without PPO updates:
+
+```bash
+python -u scripts/rl/benchmark_cpu_threads.py \
+  --repo "$PWD" \
+  --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
+  --checkpoint /kaggle/working/ppo_qp_official/checkpoints/CHOSEN_CHECKPOINT.pt \
+  --output /kaggle/working/thread_benchmark \
+  --train-indices 0 1 --frames 256 --bitrate-kbps 120 --repeats 3
+```
+
+The benchmark alternates profile order and records pair wall time, phase timings,
+actual bitrate, detection preservation and action histograms in
+`CPU_THREADS_BENCHMARK.json`. Compare the medians and the encoding outcomes:
+fewer threads are not necessarily faster, and changing threads may change the
+bitstream. This small benchmark does not establish speed across the full dataset.
+
 ## Verification boundary
 
 CPU tests cover PPO updates, KL stopping without an extra optimizer step,
-two-collector policy identity, GAE boundaries, interrupted Validation, portable
-restore, progress integrity, epoch/session batching, and worker failure cleanup.
+both KL estimators and their Gaussian reference, actor gradients, thread forwarding,
+two-collector policy identity, GAE boundaries, pair-level interrupted Validation,
+portable restore without raw files, separate resume/analysis archives, progress integrity, epoch/session batching, and worker failure cleanup.
 They do not establish real-video performance or a speedup on two T4s. Before a
 long run, perform a two-episode smoke, restore it in a new session, and run paired
 Validation on the real environment. Encoder QP/lambda behavior is unchanged in
-this revision and still requires the planned real-encoder zero-action check.
+this revision and still requires real-encoder zero/positive/negative-action checks,
+including QP/lambda consistency under QPA. Baseline-lock content integrity also
+needs hardening before the long official run; matching the declared lock hash
+alone does not prove that its contents are unchanged.
 
 ## Upstream attribution and license
 

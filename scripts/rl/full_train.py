@@ -72,27 +72,13 @@ def checkpoint_bundle(root: Path, progress: dict) -> Path:
                 if sha256_file(path) != update["checkpoint_sha256"]:
                     raise RuntimeError("Epoch checkpoint checksum mismatch")
                 z.write(path, arcname=path.relative_to(root).as_posix())
-        evidence = set(root.glob("*.log"))
-        evidence.update(root.glob("validation_epoch_*/validation_summary.json"))
-        for row in progress.get("completed", []):
-            episode = root / row["episode_dir"]
-            for name in ("summary.json", "online/au_bits.csv"):
-                path = episode / name
-                if path.is_file():
-                    evidence.add(path)
-        # Keep the latest update independently auditable without exporting all
-        # raw rollouts from all epochs. Local episode folders retain all logs.
-        latest_steps = set(progress.get("updates", [{}])[-1].get("episode_steps", [])) if progress.get("updates") else set()
-        for row in progress.get("completed", []):
-            if row["step"] in latest_steps:
-                episode = root / row["episode_dir"]
-                for pattern in ("*.jsonl", "*.log", "online/*.jsonl", "online/*.log", "online/states.txt"):
-                    evidence.update(episode.glob(pattern))
-        # Preserve evidence already restored from an earlier compact bundle.
-        evidence.update(root.glob("episodes/*/summary.json"))
-        for path in sorted(evidence):
-            if path.is_file() and not path.is_symlink():
-                z.write(path, arcname=path.relative_to(root).as_posix())
+        # Resume data only. Logs, detections and trajectories are exported by
+        # export_training_results.py, not recompressed after every PPO update.
+        for pattern in ("validation_epoch_*/validation_progress.json",
+                        "validation_epoch_*/validation_summary.json"):
+            for path in sorted(root.glob(pattern)):
+                if path.is_file() and not path.is_symlink():
+                    z.write(path, arcname=path.relative_to(root).as_posix())
     os.replace(tmp, dest)
     return dest
 
@@ -343,4 +329,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

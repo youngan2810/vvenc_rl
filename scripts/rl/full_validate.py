@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -25,11 +26,15 @@ from real_reward_pilot import (
 )
 from reward_join import read_detections
 from reward_metrics import match_one_to_one
-from full_train import RATES, TRAINING_SCHEMA, atomic_json
+from full_train import RATES, TRAINING_SCHEMA, atomic_json, checkpoint_bundle
+from training_session import new_attempt
+from validation_session import load_validation_progress, commit_validation_pair, pair_key
 
 
 def vanilla_encode(encoder: Path, source: Path, output: Path, frames: int,
-                   bitrate_kbps: int):
+                   bitrate_kbps: int, encoder_threads: int = 4):
+    if encoder_threads < 1:
+        raise ValueError('encoder_threads must be positive')
     output.mkdir(parents=True, exist_ok=False)
     stream = output / "vanilla.266"
     env = dict(os.environ)
@@ -40,7 +45,7 @@ def vanilla_encode(encoder: Path, source: Path, output: Path, frames: int,
            "--preset", "medium", "--internal-bitdepth", "10",
            "--bitrate", f"{bitrate_kbps}k", "--passes", "1", "--qpa", "1",
            "--intraperiod", "32", "--refreshtype", "cra",
-           "--sdr", "sdr_709", "--threads", "4", "--mtprofile", "-1",
+           "--sdr", "sdr_709", "--threads", str(encoder_threads), "--mtprofile", "-1",
            "--additional", "GOPSize=32:LookAhead=1", "-o", str(stream)]
     run_cmd(cmd, output / "encoder.log", env=env, timeout=1200)
     return stream
@@ -64,10 +69,12 @@ def get_counts(source_det: Path, reconstructed_det: Path, video_id: str, frames:
 
 def evaluate_bitstream(decoder: Path, detector, stream: Path, video_id: str,
                        source_det: Path, frames: int, out: Path, bitrate: int,
-                       beta: float):
+                       beta: float, decoder_threads: int = 4):
+    if decoder_threads < 1:
+        raise ValueError('decoder_threads must be positive')
     decoded10 = out / "decoded_10bit.yuv"
     decoded8 = out / "decoded_8bit.yuv"
-    run_cmd([str(decoder), "-b", str(stream), "-o", str(decoded10), "--threads", "4"],
+    run_cmd([str(decoder), "-b", str(stream), "-o", str(decoded10), "--threads", str(decoder_threads)],
             out / "decoder.log", timeout=600)
     convert_10bit_to_8bit(decoded10, decoded8, frames)
     det_file = out / "decoded_detections.jsonl"
@@ -93,8 +100,17 @@ def run(args):
         raise ValueError("Val frames must be 32..512")
     if not 1 <= args.val_videos <= 7:
         raise ValueError("Val subset must be within 1..7")
-    if args.output.exists():
-        raise FileExistsError("New Validation run requires a fresh --output")
+    if args.encoder_threads < 1 or args.decoder_threads < 1:
+        raise ValueError('Encoder/decoder threads must be positive')
+    if not math.isfinite(args.beta) or args.beta < 0:
+        raise ValueError('beta must be finite and nonnegative')
+    bundle_root = getattr(args, 'resume_bundle_root', None)
+    bundle_progress = None
+    if bundle_root is not None:
+        bundle_progress = json.loads((bundle_root / 'progress.json').read_text(encoding='utf-8'))
+        pending = bundle_progress.get('pending_validation', {})
+        if not pending.get('output') or (bundle_root / pending['output']).resolve() != args.output.resolve():
+            raise ValueError('Validation output does not match pending training progress')
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     if ckpt.get("schema") != TRAINING_SCHEMA or ckpt.get("model_version") != MODEL_VERSION:
         raise ValueError("Only full-training v2 checkpoints are valid for paired Validation")
@@ -102,57 +118,85 @@ def run(args):
     locked = read_baseline_config(Path("/kaggle/input"))
     if ckpt.get("baseline_lock_sha256") != locked["lock_sha256"]:
         raise ValueError("Validation checkpoint uses different baseline protocol")
-    detector, provenance = load_frozen_yolov5(args.repo, locked)
-    args.output.mkdir(parents=True)
+    for name in ('encoder_threads', 'decoder_threads'):
+        if getattr(args, name) != ckpt.get('training_config', {}).get(name, 4):
+            raise ValueError('Validation thread counts must match the training checkpoint')
+    video_ids = splits['val'][:args.val_videos]
     encoder = args.repo / "bin/release-static/vvencapp"
-    details = []
+    config = {'checkpoint_sha256': sha256_file(args.checkpoint),
+              'encoder_sha256': sha256_file(encoder), 'decoder_sha256': sha256_file(args.decoder),
+              'baseline_lock_sha256': locked['lock_sha256'], 'frames': args.frames,
+              'beta': args.beta, 'seed': args.seed, 'video_ids': video_ids,
+              'rates': list(RATES), 'model_version': MODEL_VERSION,
+              'encoder_threads': args.encoder_threads, 'decoder_threads': args.decoder_threads,
+              'validation_version': 2}
+    state = load_validation_progress(args.output, config)
+    done = {pair_key(row) for row in state['completed']}
     start_time = time.monotonic()
-    for v, vid in enumerate(splits["val"][:args.val_videos]):
+    prior_elapsed = state['elapsed_seconds']
+    detector = None
+    if len(done) < len(video_ids) * len(RATES):
+        detector, provenance = load_frozen_yolov5(args.repo, locked)
+        state['detector'] = provenance
+        atomic_json(args.output / 'validation_progress.json', state)
+    for v, vid in enumerate(video_ids):
         if vid in splits["train"] or vid in splits["test"]:
             raise AssertionError("Split leakage")
+        pending_rates = [rate for rate in RATES if (v, rate) not in done]
+        if not pending_rates:
+            continue
         sample = args.output / f"val_{v:02d}"
-        sample.mkdir()
-        source = sample / "reference.yuv"
+        sample.mkdir(exist_ok=True)
+        source = new_attempt(sample / "reference.yuv")
         preprocess_mov(dataset_source(records, vid), source, args.frames,
-                       sample / "ffmpeg.log", start_frame=0)
-        source_det = sample / "source_detections.jsonl"
+                       source.with_suffix('.ffmpeg.log'), start_frame=0)
+        source_det = source.with_suffix('.detections.jsonl')
         detect_all(detector, source, args.frames, vid, source_det)
-        for rate in RATES:
-            pair = sample / f"rate_{rate}"
+        for rate in pending_rates:
+            pair = new_attempt(sample / f"rate_{rate}")
             pair.mkdir()
             print(f"[VALIDATION] val_index={v} target={rate}kbps", flush=True)
             vanilla_dir = pair / "vanilla"
-            vanilla = vanilla_encode(encoder, source, vanilla_dir, args.frames, rate)
+            vanilla = vanilla_encode(encoder, source, vanilla_dir, args.frames, rate, args.encoder_threads)
             vanilla_counts = evaluate_bitstream(args.decoder, detector, vanilla, vid,
                                                 source_det, args.frames, vanilla_dir, rate,
-                                                args.beta)
+                                                args.beta, args.decoder_threads)
             ppo_dir = pair / "ppo"
             ppo, trajectory, au = encode_with_ppo(
                 args.repo, encoder, source, ppo_dir, args.frames,
                 policy_checkpoint=args.checkpoint, policy_seed=args.seed,
-                bitrate_kbps=rate, deterministic=True)
+                bitrate_kbps=rate, deterministic=True, encoder_threads=args.encoder_threads)
             ppo_counts = evaluate_bitstream(args.decoder, detector, ppo, vid,
                                             source_det, args.frames, ppo_dir, rate,
-                                            args.beta)
+                                            args.beta, args.decoder_threads)
             if len(trajectory) != args.frames or len(au) != args.frames:
                 raise RuntimeError("Incomplete PPO Validation trajectory")
-            details.append({"val_index": v, "video_id": vid, "target_kbps": rate,
+            result_pair = {"val_index": v, "video_id": vid, "target_kbps": rate,
                             "vanilla": vanilla_counts, "ppo": ppo_counts,
                             "delta_f1": ppo_counts["f1"]-vanilla_counts["f1"],
-                            "delta_kbps": ppo_counts["actual_kbps"]-vanilla_counts["actual_kbps"]})
+                            "delta_kbps": ppo_counts["actual_kbps"]-vanilla_counts["actual_kbps"]}
+            commit_validation_pair(args.output, state, result_pair,
+                                   prior_elapsed + time.monotonic() - start_time)
+            # Make each committed pair portable even if the parent/session is
+            # killed before the validation subprocess returns.
+            if bundle_root is not None:
+                checkpoint_bundle(bundle_root, bundle_progress)
+            done.add((v, rate))
             # Keep summaries and logs; drop large decoded YUVs and intermediate bitstreams.
             for file in (vanilla, ppo):
                 file.unlink(missing_ok=True)
             shutil.rmtree(ppo_dir / "actions", ignore_errors=True)
         source.unlink(missing_ok=True)
+    details = sorted(state['completed'], key=pair_key)
     result = {
         "schema": "vvenc-ppo-full-validation/1",
         "split": "val", "val_videos": args.val_videos,
         "targets_kbps": list(RATES), "frames_per_sample": args.frames,
         "policy_sampling": "deterministic", "no_optimizer_update": True,
         "model_version": MODEL_VERSION, "checkpoint_sha256": sha256_file(args.checkpoint),
-        "baseline_lock_sha256": locked["lock_sha256"], "detector": provenance,
-        "beta": args.beta, "elapsed_seconds": time.monotonic()-start_time,
+        "baseline_lock_sha256": locked["lock_sha256"], "detector": state['detector'],
+        "encoder_threads": args.encoder_threads, "decoder_threads": args.decoder_threads,
+        "beta": args.beta, "elapsed_seconds": state['elapsed_seconds'],
         "pairs": details,
         "macro_ppo_score": sum(x["ppo"]["score"] for x in details)/len(details),
         "macro_vanilla_score": sum(x["vanilla"]["score"] for x in details)/len(details),
@@ -176,8 +220,13 @@ def main():
                    help="Use 7 for a full Validation; smaller only for development smoke")
     p.add_argument("--beta", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--encoder-threads", type=int, default=4)
+    p.add_argument("--decoder-threads", type=int, default=4)
+    p.add_argument("--resume-bundle-root", type=Path,
+                   help="Trainer-owned run folder: refresh its compact ZIP after each Val pair")
     run(p.parse_args())
 
 
 if __name__ == "__main__":
     main()
+

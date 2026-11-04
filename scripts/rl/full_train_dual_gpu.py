@@ -87,8 +87,11 @@ def initialize_detector_assets(repo: Path, lock: dict) -> None:
 
 def spawn_parallel_collectors(jobs: list[dict], repo: Path, decoder: Path,
                               checkpoint: Path, seed: int, beta: float,
-                              timeout_sec: int = 3600) -> list[dict]:
+                              timeout_sec: int = 3600, encoder_threads: int = 4,
+                              decoder_threads: int = 4) -> list[dict]:
     """Collect independent stochastic on-policy rollouts on GPU 0 and GPU 1."""
+    if encoder_threads < 1 or decoder_threads < 1:
+        raise ValueError("Encoder/decoder threads must be positive")
     processes = []
     result = []
     pending = []
@@ -110,6 +113,8 @@ def spawn_parallel_collectors(jobs: list[dict], repo: Path, decoder: Path,
                 "--start-frame", str(job["start_frame"]),
                 "--bitrate-kbps", str(job["rate"]),
                 "--beta", str(beta),
+                "--encoder-threads", str(encoder_threads),
+                "--decoder-threads", str(decoder_threads),
                 "--policy-checkpoint", str(checkpoint),
                 "--policy-seed", str(seed + 100000 + job["step"]),
                 "--out", str(job["episode"]),
@@ -184,6 +189,8 @@ def run(args) -> None:
         raise ValueError("Frame count must be 32..512")
     if not math.isfinite(args.beta) or args.beta < 0:
         raise ValueError("Invalid reward beta")
+    if args.encoder_threads < 1 or args.decoder_threads < 1:
+        raise ValueError("Encoder/decoder threads must be positive")
     if not args.decoder.is_file() or not (args.repo / "bin/release-static/vvencapp").is_file():
         raise FileNotFoundError("Build vvencapp and vvdecapp before training")
     torch.set_num_threads(2)
@@ -201,7 +208,8 @@ def run(args) -> None:
            "model_version": MODEL_VERSION, "parallel_collectors": COLLECTORS,
            "collector_runner_sha256": sha256_file(Path(__file__).resolve()),
            "update_unit": "one_PPO_update_per_fresh_pair",
-           "session_version": 2, "ppo_update_version": PPO_UPDATE_VERSION,
+           "session_version": 3, "ppo_update_version": PPO_UPDATE_VERSION,
+           "encoder_threads": args.encoder_threads, "decoder_threads": args.decoder_threads,
            "run_validation": args.run_validation,
            "validation_frames": args.validation_frames}
     root = args.output
@@ -273,7 +281,8 @@ def run(args) -> None:
         start_t = time.monotonic()
         workers = spawn_parallel_collectors(jobs, args.repo, args.decoder,
                                             checkpoint, args.seed, args.beta,
-                                            args.worker_timeout)
+                                            args.worker_timeout, args.encoder_threads,
+                                            args.decoder_threads)
         worker_sec = {w["step"]: w["elapsed_sec"] for w in workers}
         _, model, trainer = load_trainer(checkpoint, cfg, locksha)
         all_rollout = []
@@ -286,6 +295,8 @@ def run(args) -> None:
                 summary.get("target_kbps") != job["rate"] or
                 summary.get("policy_checkpoint_sha256") != checkpoint_sha or
                 summary.get("deterministic_policy") is not False or
+                summary.get("encoder_threads") != args.encoder_threads or
+                summary.get("decoder_threads") != args.decoder_threads or
                 summary.get("baseline_lock_sha256") != locksha):
                 raise RuntimeError("Rollout identity invalid; refusing off-policy PPO update")
             sample, parity = validate_unchanged_collecting_policy(model, rows)
@@ -351,6 +362,9 @@ def run(args) -> None:
         print("FULL_TRAINING_COMPLETE: inspect seven-video paired Validation before Test", flush=True)
     else:
         print("SAVE PPO_QP_FULL_TRAIN_LATEST.zip AND RESUME FOR REMAINING EPISODES", flush=True)
+    if args.export_analysis:
+        from export_training_results import export_analysis
+        print("ANALYSIS_ARCHIVE=" + str(export_analysis(root)), flush=True)
 
 
 def main():
@@ -369,8 +383,12 @@ def main():
     p.add_argument("--worker-timeout", type=int, default=3600)
     p.add_argument("--keep-yuv", action="store_true")
     p.add_argument("--keep-bitstreams", action="store_true")
+    p.add_argument("--encoder-threads", type=int, default=4)
+    p.add_argument("--decoder-threads", type=int, default=4)
+    p.add_argument("--export-analysis", action="store_true",
+                   help="Export logs/rollouts separately at session end")
     p.add_argument("--resume-archive", type=Path,
-                   help="Restore a v2 source-managed bundle into an empty --output")
+                   help="Restore a v3 source-managed bundle into an empty --output")
     args = p.parse_args()
     if not 32 <= args.validation_frames <= 512 or args.worker_timeout < 60:
         p.error("Invalid validation frame count / worker timeout")
@@ -379,3 +397,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

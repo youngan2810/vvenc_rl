@@ -55,11 +55,14 @@ class DualGpuTests(TestCase):
                 return DummyProcess()
             with mock.patch('full_train_dual_gpu.subprocess.Popen', side_effect=fake_popen):
                 results = spawn_parallel_collectors(jobs, root, ckpt, ckpt,
-                                                     seed=7, beta=.1)
+                                                     seed=7, beta=.1, encoder_threads=2, decoder_threads=3)
             self.assertEqual(len(results), 2)
             self.assertEqual([env['CUDA_VISIBLE_DEVICES'] for _, env in captured],
                              ['0', '1'])
             self.assertTrue(all('--policy-checkpoint' in cmd for cmd, env in captured))
+            for cmd, _ in captured:
+                self.assertEqual(cmd[cmd.index('--encoder-threads')+1], '2')
+                self.assertEqual(cmd[cmd.index('--decoder-threads')+1], '3')
             self.assertEqual([cmd[cmd.index('--policy-checkpoint')+1] for cmd, _ in captured],
                              [str(ckpt)]*2)
 
@@ -113,3 +116,4 @@ class DualGpuTests(TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

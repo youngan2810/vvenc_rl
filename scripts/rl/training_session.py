@@ -82,12 +82,14 @@ def validate_progress(root: Path, progress: dict, config: dict, locksha: str) ->
 
 
 def validate_epoch_result(result: dict, checkpoint_sha: str, locksha: str,
-                          frames: int, beta: float) -> None:
+                          frames: int, beta: float, encoder_threads: int = 4,
+                          decoder_threads: int = 4) -> None:
     expected = {'schema': 'vvenc-ppo-full-validation/1', 'split': 'val',
                 'checkpoint_sha256': checkpoint_sha, 'baseline_lock_sha256': locksha,
                 'frames_per_sample': frames, 'beta': beta, 'val_videos': 7,
                 'targets_kbps': list(RATES), 'policy_sampling': 'deterministic',
                 'no_optimizer_update': True}
+    expected.update(encoder_threads=encoder_threads, decoder_threads=decoder_threads)
     if any(result.get(k) != v for k, v in expected.items()):
         raise ValueError('Validation result provenance mismatch')
     pairs = result.get('pairs', [])
@@ -118,7 +120,10 @@ def ensure_epoch_validations(args, root: Path, progress: dict, command_runner=No
         output = contained_path(root, pending['output']) if pending else root / f'validation_epoch_{epoch:03d}'
         summary = output / 'validation_summary.json'
         if not summary.is_file():
-            output = new_attempt(output)
+            # Continue a pair-level run in place. Only legacy/incomplete runs
+            # without an atomic progress file need a new attempt directory.
+            if not (output / 'validation_progress.json').is_file():
+                output = new_attempt(output)
             progress['pending_validation'] = {'epoch': epoch, 'output': output.relative_to(root).as_posix()}
             atomic_json(root / 'progress.json', progress)
             checkpoint_bundle(root, progress)
@@ -127,14 +132,18 @@ def ensure_epoch_validations(args, root: Path, progress: dict, command_runner=No
                     sys.executable, str(args.repo / 'scripts/rl/full_validate.py'),
                     '--repo', str(args.repo), '--decoder', str(args.decoder),
                     '--checkpoint', str(checkpoint), '--output', str(output),
+                    '--resume-bundle-root', str(root),
                     '--frames', str(args.validation_frames), '--beta', str(args.beta),
+                    '--encoder-threads', str(getattr(args, 'encoder_threads', 4)),
+                    '--decoder-threads', str(getattr(args, 'decoder_threads', 4)),
                 ], root / (output.name + '.log'))
             finally:
                 checkpoint_bundle(root, progress)
             summary = output / 'validation_summary.json'
         result = json.loads(summary.read_text(encoding='utf-8'))
         validate_epoch_result(result, update['checkpoint_sha256'], progress['locksha'],
-                              args.validation_frames, args.beta)
+                              args.validation_frames, args.beta,
+                              getattr(args, 'encoder_threads', 4), getattr(args, 'decoder_threads', 4))
         best = max((v['macro_ppo_score'] for v in progress['validations']), default=-float('inf'))
         if result['macro_ppo_score'] > best:
             temp = root / 'best_validation.pt.tmp'
@@ -161,7 +170,7 @@ def restore_bundle(archive: Path, root: Path) -> None:
         if z.testzip() is not None:
             raise ValueError('Archive CRC failure')
         progress = json.loads(z.read('progress.json'))
-        if progress.get('training_config', {}).get('session_version') != 2:
+        if progress.get('training_config', {}).get('session_version') != 3:
             raise ValueError('Legacy benchmark checkpoint: start a fresh official run with this source version')
         import hashlib
         if hashlib.sha256(z.read('checkpoint/latest.pt')).hexdigest() != progress['latest_sha256']:
@@ -181,3 +190,4 @@ def restore_bundle(archive: Path, root: Path) -> None:
         if best.is_file():
             shutil.copyfile(best, root / 'best_validation.pt')
         atomic_json(root / 'progress.json', progress)
+

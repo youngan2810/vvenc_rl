@@ -227,8 +227,11 @@ def encode_with_ppo(
     repo: Path, encoder: Path, source_yuv: Path, out: Path, frames: int,
     policy_checkpoint: Path | None = None, policy_seed: int = 7,
     bitrate_kbps: int = BITRATE_KBPS, deterministic: bool = False,
+    encoder_threads: int = 4,
 ):
     import torch
+    if encoder_threads < 1:
+        raise ValueError("encoder_threads must be positive")
     out.mkdir(parents=True, exist_ok=False)
     action_dir = out / "actions"
     state_file = out / "states.txt"
@@ -270,7 +273,7 @@ def encode_with_ppo(
             "--preset", "medium", "--internal-bitdepth", "10",
             "--bitrate", f"{bitrate_kbps}k", "--passes", "1", "--qpa", "1",
             "--intraperiod", "32", "--refreshtype", "cra",
-            "--sdr", "sdr_709", "--threads", "4", "--mtprofile", "-1",
+            "--sdr", "sdr_709", "--threads", str(encoder_threads), "--mtprofile", "-1",
             "--additional", "GOPSize=32:LookAhead=1", "-o", str(stream),
         ]
         run_cmd(cmd, out / "encoder.log", env=env, timeout=1200)
@@ -282,8 +285,8 @@ def encode_with_ppo(
             records = [json.loads(s) for s in f if s.strip()]
         assert len(records) == frames and len({r["poc"] for r in records}) == frames
         assert {r["poc"] for r in records} == set(range(frames))
-        if not deterministic:
-            assert any(any(v != 0 for v in r["discrete_action"]) for r in records), "PPO produced zero actions only"
+        # Zero delta-QP is a valid policy decision, even for an entire episode.
+        # Action connectivity is checked separately; training must not reject it.
         assert au[-1].cumulative_bits == stream.stat().st_size * 8
         return stream, records, au
     finally:
@@ -483,7 +486,11 @@ def main():
                         help="Previously updated PPO checkpoint for a NEW on-policy episode")
     parser.add_argument("--policy-seed", type=int, default=7,
                         help="Sampling RNG seed; model weights must come from checkpoint")
+    parser.add_argument("--encoder-threads", type=int, default=4)
+    parser.add_argument("--decoder-threads", type=int, default=4)
     args = parser.parse_args()
+    if args.encoder_threads < 1 or args.decoder_threads < 1:
+        parser.error("Encoder/decoder threads must be positive")
 
     if args.frames < 32 or args.frames > 512:
         parser.error("Episode frames must be between 32 and 512")
@@ -526,12 +533,13 @@ def main():
         args.frames, policy_checkpoint=args.policy_checkpoint,
         policy_seed=args.policy_seed,
         bitrate_kbps=args.bitrate_kbps, deterministic=args.deterministic,
+        encoder_threads=args.encoder_threads,
     )
     timings["encode_and_policy_seconds"] = time.monotonic() - phase_start
     phase_start = time.monotonic()
     decode = args.out / "decoded_10bit.yuv"
     run_cmd([str(args.decoder), "-b", str(stream), "-o", str(decode),
-             "--threads", "4"], args.out / "decoder.log", timeout=600)
+             "--threads", str(args.decoder_threads)], args.out / "decoder.log", timeout=600)
     rec8 = args.out / "decoded_8bit.yuv"
     convert_10bit_to_8bit(decode, rec8, args.frames)
     alignment = temporal_alignment_check(source_yuv, decode, args.frames)
@@ -584,6 +592,7 @@ def main():
         "mean_rate_penalty": sum(r["reward_diagnostics"]["detection_term"] - r["reward"] for r in joined)/len(joined),
         "delta_qp_histogram": {str(a): action_values.count(a) for a in range(-2, 3)},
         "timings": timings,
+        "encoder_threads": args.encoder_threads, "decoder_threads": args.decoder_threads,
         "total_tp": sum(r["reward_diagnostics"]["counts"]["tp"] for r in joined),
         "total_fp": sum(r["reward_diagnostics"]["counts"]["fp"] for r in joined),
         "total_fn": sum(r["reward_diagnostics"]["counts"]["fn"] for r in joined),
@@ -625,4 +634,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
