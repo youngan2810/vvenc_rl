@@ -2,7 +2,7 @@
 
 Observations:
     spatial: float32 [batch, 3, 3, 4] (activity, temporal proxy, QPA)
-    global_: float32 [batch, 8]      (see README_PPO.md)
+    global_: float32 [batch, 8]      (see README.md)
 Actions:
     12 Gaussian latents, tanh-squashed to [-2, 2], quantized to integer
     delta-QP [-2, 2] for the 4 x 3 CTU map (row-major).
