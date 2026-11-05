@@ -313,29 +313,7 @@ def convert_10bit_to_8bit(path10: Path, path8: Path, frames: int):
             out.write(np.minimum(255, (pixels + 2) // 4).astype(np.uint8).tobytes())
 
 
-def temporal_alignment_check(ref8: Path, decoded10: Path, frames: int):
-    if frames < 5:
-        return {"checked": False}
-    samples = sorted(set(max(1, min(frames - 2, x)) for x in
-                         (frames // 4, frames // 2, 3 * frames // 4)))
-    suspects = 0
-    values = []
-    with ref8.open("rb") as a, decoded10.open("rb") as b:
-        for frame in samples:
-            b.seek(frame * FB10)
-            y = np.frombuffer(b.read(W * H * 2), dtype="<u2").astype(np.float64)
-            by_shift = {}
-            for shift in (-1, 0, 1):
-                a.seek((frame + shift) * FBY)
-                yy = np.frombuffer(a.read(W * H), dtype=np.uint8).astype(np.float64) * 4
-                by_shift[shift] = float(np.mean((yy - y) ** 2))
-            if min(by_shift[-1], by_shift[1]) < 0.75 * by_shift[0]:
-                suspects += 1
-            values.append({"frame": frame, "mse_minus1": by_shift[-1],
-                           "mse_0": by_shift[0], "mse_plus1": by_shift[1]})
-    if suspects >= 2:
-        raise RuntimeError("Possible VVdeC frame misalignment, inspect frame/POC mapping")
-    return {"checked": True, "sampled": values, "suspect_count": suspects}
+from decoder_alignment import temporal_alignment_check
 
 
 def rgb_batches_yuv8(path: Path, frames: int, batch_size: int):
@@ -542,7 +520,8 @@ def main():
              "--threads", str(args.decoder_threads)], args.out / "decoder.log", timeout=600)
     rec8 = args.out / "decoded_8bit.yuv"
     convert_10bit_to_8bit(decode, rec8, args.frames)
-    alignment = temporal_alignment_check(source_yuv, decode, args.frames)
+    alignment = temporal_alignment_check(source_yuv, decode, args.frames,
+        bitstream=stream, decoder=args.decoder, decoder_threads=args.decoder_threads)
     timings["decode_convert_alignment_seconds"] = time.monotonic() - phase_start
 
     phase_start = time.monotonic()

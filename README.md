@@ -232,3 +232,85 @@ When referencing VVenC in academic work, use the upstream citation:
 **All rights reserved.**
 
 **VVenC® is a registered trademark of the Fraunhofer-Gesellschaft zur Förderung der angewandten Forschung e.V.**
+
+
+## Alignment repair and official EP58 recovery (2026-11-05)
+
+The old three-sample luma-similarity abort was a false positive on the official
+200 kbps episode 60. A locally compiled, output-instrumented VVdeC v3.2.0
+confirmed output POC 0..255 for both archived episodes 59 and 60. Its decoded
+YUV matched each archived canonical YUV byte-for-byte. Episode 60's globally
+averaged MSE for shifts -1/0/+1 was 44.732694/34.259238/43.690946, despite two
+of the three old samples crossing the heuristic threshold. This is alignment
+evidence, not a completed PPO update or a detection/bitrate improvement claim.
+
+Training now requires a separate POC auditor beside the canonical decoder.
+The canonical encoder/decoder and detector settings remain locked. The auditor
+records POC immediately after each progressive frame is written, including
+frames released during decoder flush. Every training and validation decode
+must have output indices/POCs 0..N-1 and identical canonical/auditor YUV bytes.
+The training collector also checks luma over all interior frames; a strong
+systematic shift still fails. Static/tied frames cannot independently prove a
+shift. Logs, mapping JSONL and hashes are retained, and temporary audit YUV is
+removed. This adds a second CPU decode per bitstream; measure session runtime.
+
+Build the auditor from the clean upstream VVdeC v3.2.0 checkout used to build
+the canonical decoder (commit 649f0b2fafee977c998d7e4d674f8b88d952e3a3):
+
+```bash
+python scripts/rl/build_vvdec_audit.py \
+  --source /kaggle/working/vvdec_v3_2_0 \
+  --work /kaggle/working/vvdec_poc_audit_build \
+  --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp
+python -m unittest discover -s scripts/rl -p 'test_*.py'
+```
+
+Use a new --work directory; the builder refuses overwrites. It produces
+vvdecapp_poc_audit beside vvdecapp and records its build provenance. It does
+not replace the canonical decoder. Pin this repository's repaired commit
+when building/running; do not modify source in notebook cells.
+
+The explicit --allow-alignment-upgrade flag accepts only the verified official
+58-episode/29-update ec6 checkpoint (SHA256
+96affafcbb6e495dbe4d6f94d046900acdf08b22f40640eb8ded47f241b6a115).
+It checks the original progress and checkpoint/config before writing anything,
+requires a clean committed source tree, checks the source diff against an
+alignment-only allowlist and exact collector/runner/validation transformations,
+and permits only source-commit and runner-hash config changes. PPO, reward,
+action, encoder source, thread counts, schedule and hyperparameters are not
+migrated. The original checkpoint bytes stay unchanged. Original progress is
+saved as progress_before_alignment_upgrade.json; the committed progress records
+both configs, boundary and source-diff hash in alignment_upgrade. The old
+checkpoint loads with its original config; new PPO checkpoints use the repaired
+source config. Later source changes require a separately reviewed upgrade.
+
+After restoring the verified recovery bundle's INNER
+PPO_QP_FULL_TRAIN_LATEST.zip to a known input path, run only the 58->60 smoke:
+
+```bash
+python -u scripts/rl/full_train_dual_gpu.py \
+  --repo /kaggle/working/vvenc_rl_source \
+  --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
+  --output /kaggle/working/vvc_ppo_qp_official \
+  --resume-archive /kaggle/working/official_resume_input.zip \
+  --allow-alignment-upgrade \
+  --epochs 3 --frames 256 --seed 20261103 --beta 0.1 \
+  --run-validation --validation-frames 256 \
+  --encoder-threads 4 --decoder-threads 4 \
+  --max-episodes 2 --export-analysis
+```
+
+The output directory must be empty for archive restore. Same-runtime resume
+omits --resume-archive. Both episodes 59 and 60 are collected afresh from the
+unchanged checkpoint 58 before update 30. Require completed=60, updates=30,
+valid mapping/byte parity, successful YOLO/reward, and a committed new checkpoint
+before longer sessions. Save the new rolling resume ZIP and analysis archive.
+No epoch validation is expected before 325. Official full training/test remain
+unfinished; a fresh GPU smoke after this repair is still required.
+
+The old official notebook v1.1 pins ec6 and requires exact manifest/config/hash
+matches. It cannot directly import this source upgrade. Its orchestration and
+manifest export must be updated to call the audited upgrade and carry its
+provenance; do not change hashes or disable checks to make it accept a bundle.
+A source CLI smoke above does not by itself create a notebook-compatible
+OFFICIAL_SESSION_EXPORT manifest. Keep original archives and export provenance.

@@ -193,6 +193,8 @@ def run(args) -> None:
         raise ValueError("Encoder/decoder threads must be positive")
     if not args.decoder.is_file() or not (args.repo / "bin/release-static/vvencapp").is_file():
         raise FileNotFoundError("Build vvencapp and vvdecapp before training")
+    from decoder_alignment import require_auditor
+    require_auditor(args.decoder)
     torch.set_num_threads(2)
     splits, records = read_lock_manifest(Path("/kaggle/input"))
     lock = read_baseline_config(Path("/kaggle/input"))
@@ -223,6 +225,9 @@ def run(args) -> None:
     locksha = lock["lock_sha256"]
     if progress_path.is_file():
         progress = json.loads(progress_path.read_text())
+        if getattr(args, "allow_alignment_upgrade", False):
+            from alignment_upgrade import upgrade_progress
+            progress = upgrade_progress(args.repo, root, progress, cfg, locksha)
         if (progress.get("schema") != TRAINING_SCHEMA or
                 progress.get("training_config") != cfg or
                 progress.get("locksha") != locksha):
@@ -284,7 +289,8 @@ def run(args) -> None:
                                             args.worker_timeout, args.encoder_threads,
                                             args.decoder_threads)
         worker_sec = {w["step"]: w["elapsed_sec"] for w in workers}
-        _, model, trainer = load_trainer(checkpoint, cfg, locksha)
+        from alignment_upgrade import load_compatible_trainer
+        _, model, trainer = load_compatible_trainer(checkpoint, cfg, locksha, progress)
         all_rollout = []
         summaries = []
         for job in jobs:
@@ -389,6 +395,8 @@ def main():
                    help="Export logs/rollouts separately at session end")
     p.add_argument("--resume-archive", type=Path,
                    help="Restore a v3 source-managed bundle into an empty --output")
+    p.add_argument("--allow-alignment-upgrade", action="store_true",
+                   help="Explicit audited ec6 EP58 alignment-only upgrade")
     args = p.parse_args()
     if not 32 <= args.validation_frames <= 512 or args.worker_timeout < 60:
         p.error("Invalid validation frame count / worker timeout")

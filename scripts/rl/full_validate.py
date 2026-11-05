@@ -77,6 +77,8 @@ def evaluate_bitstream(decoder: Path, detector, stream: Path, video_id: str,
     run_cmd([str(decoder), "-b", str(stream), "-o", str(decoded10), "--threads", str(decoder_threads)],
             out / "decoder.log", timeout=600)
     convert_10bit_to_8bit(decoded10, decoded8, frames)
+    from decoder_alignment import verify_decode_mapping
+    verify_decode_mapping(stream, decoded10, decoder, frames, decoder_threads)
     det_file = out / "decoded_detections.jsonl"
     detect_all(detector, decoded8, frames, video_id, det_file)
     counts = get_counts(source_det, det_file, video_id, frames)
