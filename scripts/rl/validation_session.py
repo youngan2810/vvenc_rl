@@ -26,7 +26,10 @@ def load_validation_progress(output: Path, config: dict) -> dict:
             if row['video_id'] != config['video_ids'][key[0]]:
                 raise ValueError('Validation pair video identity mismatch')
             for method in ('vanilla', 'ppo'):
-                if not all(math.isfinite(row[method][k]) for k in ('score', 'actual_kbps', 'f1')):
+                fields=['score','actual_kbps','f1']
+                if config.get('validation_version',2)>=3:
+                    fields+=['mean_training_reward','discounted_return']
+                if not all(math.isfinite(row[method][k]) for k in fields):
                     raise ValueError('Nonfinite validation pair')
             keys.add(key)
         return state

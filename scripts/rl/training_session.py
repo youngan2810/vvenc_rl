@@ -17,6 +17,7 @@ import zipfile
 
 from full_train import RATES, atomic_json, checkpoint_bundle, create_schedule
 from real_reward_pilot import sha256_file
+from validation_objective import SELECTION_METRIC, VALIDATION_VERSION, macro_objective_metrics
 
 
 def contained_path(root: Path, relative: str) -> Path:
@@ -83,12 +84,14 @@ def validate_progress(root: Path, progress: dict, config: dict, locksha: str) ->
 
 def validate_epoch_result(result: dict, checkpoint_sha: str, locksha: str,
                           frames: int, beta: float, encoder_threads: int = 4,
-                          decoder_threads: int = 4) -> None:
+                          decoder_threads: int = 4, gamma: float = .99) -> None:
     expected = {'schema': 'vvenc-ppo-full-validation/1', 'split': 'val',
                 'checkpoint_sha256': checkpoint_sha, 'baseline_lock_sha256': locksha,
                 'frames_per_sample': frames, 'beta': beta, 'val_videos': 7,
                 'targets_kbps': list(RATES), 'policy_sampling': 'deterministic',
-                'no_optimizer_update': True}
+                'no_optimizer_update': True, 'gamma': gamma,
+                'checkpoint_selection_metric': SELECTION_METRIC,
+                'validation_version': VALIDATION_VERSION}
     expected.update(encoder_threads=encoder_threads, decoder_threads=decoder_threads)
     if any(result.get(k) != v for k, v in expected.items()):
         raise ValueError('Validation result provenance mismatch')
@@ -96,8 +99,13 @@ def validate_epoch_result(result: dict, checkpoint_sha: str, locksha: str,
     if len(pairs) != 35 or {(p['val_index'], p['target_kbps']) for p in pairs} != {
             (i, r) for i in range(7) for r in RATES}:
         raise ValueError('Validation requires exactly 7 videos x 5 rates')
-    if not all(math.isfinite(result[k]) for k in ('macro_ppo_score', 'macro_vanilla_score')):
+    if not all(math.isfinite(result[k]) for k in ('macro_ppo_score', 'macro_vanilla_score',
+            'macro_ppo_discounted_return','macro_vanilla_discounted_return',
+            'macro_ppo_mean_training_reward','macro_vanilla_mean_training_reward')):
         raise ValueError('Nonfinite validation score')
+    computed = macro_objective_metrics(pairs)
+    if any(not math.isclose(result[k],v,rel_tol=1e-10,abs_tol=1e-10) for k,v in computed.items()):
+        raise ValueError('Validation summary return differs from committed pairs')
 
 
 def ensure_epoch_validations(args, root: Path, progress: dict, command_runner=None) -> None:
@@ -144,13 +152,18 @@ def ensure_epoch_validations(args, root: Path, progress: dict, command_runner=No
         validate_epoch_result(result, update['checkpoint_sha256'], progress['locksha'],
                               args.validation_frames, args.beta,
                               getattr(args, 'encoder_threads', 4), getattr(args, 'decoder_threads', 4))
-        best = max((v['macro_ppo_score'] for v in progress['validations']), default=-float('inf'))
-        if result['macro_ppo_score'] > best:
+        best = max((v['selection_value'] for v in progress['validations']), default=-float('inf'))
+        if result[SELECTION_METRIC] > best:
             temp = root / 'best_validation.pt.tmp'
             shutil.copyfile(checkpoint, temp)
             temp.replace(root / 'best_validation.pt')
         atomic_json(root / 'latest_validation.json', result)
         progress['validations'].append({'epoch': epoch, 'checkpoint_sha256': update['checkpoint_sha256'],
+            'selection_metric': SELECTION_METRIC, 'selection_value': result[SELECTION_METRIC],
+            'macro_ppo_discounted_return': result['macro_ppo_discounted_return'],
+            'macro_vanilla_discounted_return': result['macro_vanilla_discounted_return'],
+            'macro_ppo_mean_training_reward': result['macro_ppo_mean_training_reward'],
+            'macro_vanilla_mean_training_reward': result['macro_vanilla_mean_training_reward'],
             'macro_ppo_score': result['macro_ppo_score'], 'macro_vanilla_score': result['macro_vanilla_score']})
         progress.pop('pending_validation', None)
         atomic_json(root / 'progress.json', progress)

@@ -59,9 +59,14 @@ Frame/POC, AU accounting, actual weight changes and checkpoint history passed.
   collectors and atomic progress/bundles. Sanitize inherited VVENC_RL settings.
 - Reward stays frame-level pseudo-reference F1 (documented empty-reference
   rule) minus.1*absolute log cumulative rate error in policy decision order.
-  Validation selection stays aggregate clip F1 minus final rate penalty.
-  These can disagree: validation score is not mean training reward. Assess
-  actual-rate RD curves and fixed-map controls, not F1 alone.
+  Validation now reuses the exact frame reward function, true AU bits and
+  each encode's policy decision order. It records mean training-style reward
+  and discounted return using gamma from the checkpoint. Select checkpoints
+  by `macro_ppo_discounted_return`, balanced over the35Val pairs. Clip F1,
+  actual bitrate and the old final-rate score remain separate reported metrics.
+  Deterministic Val differs from stochastic training; matching reward/gamma
+  does not prove equal expected returns or improved rate-distortion performance.
+  Assess actual-rate RD curves and fixed-map controls, not F1 alone.
 - Original diagnostic replays explicitly use `ppo_agent_legacy.py`; new
   trainer/bridge reject old architecture checkpoints. Never disable source,
   config or hash checks to resume EP467 in v3.
@@ -97,25 +102,30 @@ learning after actor KL stopping, independent parameters, old-checkpoint
 rejection and exact seeded resume. Synthetic tests are not task-performance
 evidence.
 
-Local verification:79 CPU tests passed. A real32-frame, four-encode native
+Local verification initially passed79 CPU tests; objective-alignment changes
+add regressions for decision-order/discounted rewards, portable Val resume and
+checkpoint selection when clip score and training return disagree. A real32-frame, four-encode native
 Windows codec/bridge preflight passed; deterministic/stochastic bridge
 log-probability/value errors were zero and both output-POC audits passed.
 Windows binary hashes differ from the pinned Linux/Kaggle binaries. The
 notebook repeats the gate using the canonical Kaggle codecs before collecting
 real rewards. No new GPU task training or v3 quality gain is claimed here.
 
-Use the pinned v3 notebook and a new run ID. Under a short deadline, choose
-one epoch BEFORE starting:325episodes, all65Train/7Val videos, five rates and
-256frames. Collect10episodes first, resume the SAME run for90more to inspect
-100, then max-episodes0 to finish325 plus35-pair validation. Session limits
+Use the pinned v3 notebook and a new run ID. The requested plan is three
+epochs:975episodes, all65Train/7Val videos, five rates and256frames.
+Collect10episodes first, resume the SAME run for90more to inspect100,
+then continue the975episode schedule. Full35-pair validation occurs at
+325/650/975. Session limits
 count additional episodes. Do not change source, epochs, seed or PPO settings
 on resume. A successful bounded session is not complete training/validation.
 Monitor critic variation/explained variance against nonconstant returns,
 integer histograms/entropy, actor/value step counts, gradients and rate/task
 outcomes. A uniform map alone is not an automatic failure: compare controls.
-Select/freeze by Val, then run100Test videos at the SAME full-clip protocol as
+Select/freeze by discounted Val return, then run100Test videos at the SAME full-clip protocol as
 the completed baseline. Never replace full Test clips with256frames or tune
-on Test. One seed/epoch is budget-limited, not a convergence guarantee.
+on Test. Three epochs with one seed is not a convergence guarantee. Source
+pins before objective alignment, including c51ebc9, retain their original
+selection rule; do not silently resume their runs with a changed source/config.
 
 ## Source layout and original experiment
 

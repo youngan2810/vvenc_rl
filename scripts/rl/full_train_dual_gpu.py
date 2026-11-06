@@ -35,6 +35,7 @@ from full_train import (RATES, TRAINING_SCHEMA, atomic_checkpoint,
                         clean_episode, create_schedule, load_trainer,
                         train_checkpoint, video_frame_capacity)
 from ppo_agent import MODEL_VERSION, PPO_UPDATE_VERSION, PPOActorCritic, PPOTrainer
+from validation_objective import SELECTION_METRIC
 from training_session import (ensure_epoch_validations, new_attempt,
                               restore_bundle, session_limit, validate_progress)
 from real_reward_pilot import (YOLO_REF, dataset_source, read_baseline_config,
@@ -215,6 +216,7 @@ def run(args) -> None:
            "session_version": 3, "ppo_update_version": PPO_UPDATE_VERSION,
            "schedule_version": "interleaved-65-videos-v2",
            "entropy_regularizer": "exact-quantized-delta-qp",
+           "checkpoint_selection_metric": SELECTION_METRIC,
            "encoder_threads": args.encoder_threads, "decoder_threads": args.decoder_threads,
            "run_validation": args.run_validation,
            "validation_frames": args.validation_frames}

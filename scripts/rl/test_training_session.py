@@ -37,8 +37,36 @@ class SessionTests(TestCase):
                 'no_optimizer_update': True, 'frames_per_sample': 256, 'beta': .1,
                 'checkpoint_sha256': progress['latest_sha256'], 'baseline_lock_sha256': 'lock',
                 'macro_ppo_score': .7, 'macro_vanilla_score': .6,
+                'macro_ppo_discounted_return': 70., 'macro_vanilla_discounted_return': 60.,
+                'macro_ppo_mean_training_reward': .65, 'macro_vanilla_mean_training_reward': .55,
+                'gamma': .99, 'validation_version': 3,
+                'checkpoint_selection_metric': 'macro_ppo_discounted_return',
                 'encoder_threads': 4, 'decoder_threads': 4,
-                'pairs': [{'val_index': i, 'target_kbps': r} for i in range(7) for r in RATES]}
+                'pairs': [{'val_index': i, 'target_kbps': r,
+                    'ppo': {'discounted_return':70., 'mean_training_reward':.65},
+                    'vanilla': {'discounted_return':60., 'mean_training_reward':.55}}
+                    for i in range(7) for r in RATES]}
+
+    def test_best_checkpoint_uses_discounted_training_return_not_clip_score(self):
+        with TemporaryDirectory() as folder:
+            root=Path(folder);args,p=self.fixture(root)
+            first=root/'validation_epoch_001';first.mkdir()
+            atomic_json(first/'validation_summary.json',self.result(p))
+            ensure_epoch_validations(args,root,p)
+            second=root/'checkpoints/epoch2.pt';second.write_bytes(b'second epoch weights')
+            p['completed'] += [{'step':i+1} for i in range(325,650)]
+            p['updates'].append({'episode_steps':[650],'checkpoint_path':'checkpoints/epoch2.pt','checkpoint_sha256':digest(second)})
+            p['latest_sha256']=digest(second);p['latest_checkpoint']='checkpoints/epoch2.pt'
+            result=self.result(p)
+            result['macro_ppo_score']=.2  # Clip score prefers epoch1.
+            result['macro_ppo_discounted_return']=80.
+            for row in result['pairs']:row['ppo']['discounted_return']=80.
+            output=root/'validation_epoch_002';output.mkdir()
+            atomic_json(output/'validation_summary.json',result)
+            ensure_epoch_validations(args,root,p)
+            self.assertEqual((root/'best_validation.pt').read_bytes(),second.read_bytes())
+            self.assertEqual(p['validations'][-1]['selection_value'],80.)
+            self.assertEqual(p['validations'][-1]['selection_metric'],'macro_ppo_discounted_return')
 
     def test_failed_validation_is_retried_before_next_epoch_without_deletion(self):
         with TemporaryDirectory() as folder:

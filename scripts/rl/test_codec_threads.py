@@ -77,7 +77,7 @@ class CodecThreadTests(TestCase):
             with mock.patch.object(val,'run_cmd',side_effect=lambda cmd,*a,**k: commands.append(cmd)):
                 stream=val.vanilla_encode(root/'enc',root/'input',root/'out',32,120,encoder_threads=2)
                 stream.write_bytes(b'bits')
-                with mock.patch('decoder_alignment.verify_decode_mapping'), mock.patch.object(val,'convert_10bit_to_8bit'), mock.patch.object(val,'detect_all'), mock.patch.object(
+                with mock.patch.object(val,'training_objective_metrics',return_value={}), mock.patch('decoder_alignment.verify_decode_mapping'), mock.patch.object(val,'convert_10bit_to_8bit'), mock.patch.object(val,'detect_all'), mock.patch.object(
                         val,'get_counts',return_value={'f1':.5}):
                     val.evaluate_bitstream(root/'dec',None,stream,'video',root/'detections',32,root/'out',120,.1,decoder_threads=3)
             self.assertEqual(commands[0][commands[0].index('--threads')+1], '2')

@@ -32,8 +32,9 @@ class ValidationResumeTests(TestCase):
                 'pending_validation':{'epoch':1, 'output':'validation_epoch_001'}}
             atomic_json(root/'progress.json', progress)
             weights = {'schema': TRAINING_SCHEMA, 'model_version': MODEL_VERSION,
+                       'ppo_hparams': {'gamma': .99},
                        'baseline_lock_sha256': 'lock',
-                       'training_config': {'encoder_threads': 2, 'decoder_threads': 2}}
+                       'training_config': {'encoder_threads': 2, 'decoder_threads': 2, 'beta': .1}}
             stack.enter_context(mock.patch.object(val.torch.cuda, 'is_available', return_value=True))
             stack.enter_context(mock.patch.object(val.torch, 'load', return_value=weights))
             stack.enter_context(mock.patch.object(val, 'read_lock_manifest',
@@ -56,13 +57,14 @@ class ValidationResumeTests(TestCase):
                 ppo_rates.append(kwargs['bitrate_kbps']); threads.append(kwargs['encoder_threads'])
                 return stream, [None]*frames, [None]*frames
             fail = [True]
-            def evaluate(decoder, detector, stream, vid, source_det, frames, out, rate, beta, decoder_threads):
+            def evaluate(decoder, detector, stream, vid, source_det, frames, out, rate, beta, decoder_threads, gamma):
                 threads.append(decoder_threads)
                 if stream.name == 'ppo.266' and rate == 120 and fail[0]:
                     raise RuntimeError('simulated interruption')
                 f1 = .7 if stream.name == 'ppo.266' else .6
                 return {'tp':7, 'fp':2, 'fn':1, 'precision':.7, 'recall':.7,
-                        'f1':f1, 'actual_kbps':rate, 'target_kbps':rate, 'rate_penalty':0., 'score':f1}
+                        'f1':f1, 'actual_kbps':rate, 'target_kbps':rate, 'rate_penalty':0., 'score':f1,
+                        'mean_training_reward':f1-.1,'discounted_return':10*f1,'gamma':gamma}
             stack.enter_context(mock.patch.object(val, 'vanilla_encode', side_effect=vanilla))
             stack.enter_context(mock.patch.object(val, 'encode_with_ppo', side_effect=ppo))
             stack.enter_context(mock.patch.object(val, 'evaluate_bitstream', side_effect=evaluate))
@@ -90,7 +92,7 @@ class ValidationResumeTests(TestCase):
             detector_loader.reset_mock(); vanilla_rates.clear(); val.run(args)
             detector_loader.assert_not_called(); self.assertEqual(vanilla_rates, [])
             args.beta = .2
-            with self.assertRaisesRegex(ValueError, 'changed checkpoint'): val.run(args)
+            with self.assertRaisesRegex(ValueError, 'beta must match'): val.run(args)
 
 
 if __name__ == '__main__': main()

@@ -29,6 +29,8 @@ from reward_metrics import match_one_to_one
 from full_train import RATES, TRAINING_SCHEMA, atomic_json, checkpoint_bundle
 from training_session import new_attempt
 from validation_session import load_validation_progress, commit_validation_pair, pair_key
+from validation_objective import (SELECTION_METRIC, VALIDATION_VERSION,
+    training_objective_metrics, macro_objective_metrics)
 
 
 def vanilla_encode(encoder: Path, source: Path, output: Path, frames: int,
@@ -42,6 +44,8 @@ def vanilla_encode(encoder: Path, source: Path, output: Path, frames: int,
         if not key.startswith('VVENC_RL_'):
             continue
         env.pop(key, None)
+    env['VVENC_RL_STATE_FILE'] = str(output/'states.txt')
+    env['VVENC_RL_AU_BITS_FILE'] = str(output/'au_bits.csv')
     cmd = [str(encoder), "-i", str(source), "-s", f"{W}x{H}",
            "-r", str(FPS), "-f", str(frames), "-c", "yuv420",
            "--preset", "medium", "--internal-bitdepth", "10",
@@ -71,7 +75,7 @@ def get_counts(source_det: Path, reconstructed_det: Path, video_id: str, frames:
 
 def evaluate_bitstream(decoder: Path, detector, stream: Path, video_id: str,
                        source_det: Path, frames: int, out: Path, bitrate: int,
-                       beta: float, decoder_threads: int = 4):
+                       beta: float, decoder_threads: int = 4, gamma: float = .99):
     if decoder_threads < 1:
         raise ValueError('decoder_threads must be positive')
     decoded10 = out / "decoded_10bit.yuv"
@@ -92,6 +96,9 @@ def evaluate_bitstream(decoder: Path, detector, stream: Path, video_id: str,
         "rate_penalty": beta * abs(log(max(actual_bps,1.0) / (bitrate * 1000))),
     })
     counts["score"] = counts["f1"] - counts["rate_penalty"]
+    counts.update(training_objective_metrics(stream,out/'states.txt',out/'au_bits.csv',
+        source_det,det_file,video_id,frames,bitrate,beta,gamma,
+        trace_path=out/'frame_rewards.jsonl'))
     for f in (decoded10, decoded8):
         f.unlink(missing_ok=True)
     return counts
@@ -117,7 +124,12 @@ def run(args):
             raise ValueError('Validation output does not match pending training progress')
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     if ckpt.get("schema") != TRAINING_SCHEMA or ckpt.get("model_version") != MODEL_VERSION:
-        raise ValueError("Only full-training v2 checkpoints are valid for paired Validation")
+        raise ValueError("Only matching full-training v3 checkpoints are valid for paired Validation")
+    gamma = float(ckpt['ppo_hparams']['gamma'])
+    if not math.isfinite(gamma) or not 0<=gamma<=1:
+        raise ValueError('Invalid checkpoint gamma')
+    if args.beta != ckpt['training_config']['beta']:
+        raise ValueError('Validation beta must match the training reward')
     splits, records = read_lock_manifest(Path("/kaggle/input"))
     locked = read_baseline_config(Path("/kaggle/input"))
     if ckpt.get("baseline_lock_sha256") != locked["lock_sha256"]:
@@ -133,7 +145,8 @@ def run(args):
               'beta': args.beta, 'seed': args.seed, 'video_ids': video_ids,
               'rates': list(RATES), 'model_version': MODEL_VERSION,
               'encoder_threads': args.encoder_threads, 'decoder_threads': args.decoder_threads,
-              'validation_version': 2}
+              'validation_version': VALIDATION_VERSION, 'gamma': gamma,
+              'checkpoint_selection_metric': SELECTION_METRIC}
     state = load_validation_progress(args.output, config)
     done = {pair_key(row) for row in state['completed']}
     start_time = time.monotonic()
@@ -164,7 +177,7 @@ def run(args):
             vanilla = vanilla_encode(encoder, source, vanilla_dir, args.frames, rate, args.encoder_threads)
             vanilla_counts = evaluate_bitstream(args.decoder, detector, vanilla, vid,
                                                 source_det, args.frames, vanilla_dir, rate,
-                                                args.beta, args.decoder_threads)
+                                                args.beta, args.decoder_threads, gamma)
             ppo_dir = pair / "ppo"
             ppo, trajectory, au = encode_with_ppo(
                 args.repo, encoder, source, ppo_dir, args.frames,
@@ -172,7 +185,7 @@ def run(args):
                 bitrate_kbps=rate, deterministic=True, encoder_threads=args.encoder_threads)
             ppo_counts = evaluate_bitstream(args.decoder, detector, ppo, vid,
                                             source_det, args.frames, ppo_dir, rate,
-                                            args.beta, args.decoder_threads)
+                                            args.beta, args.decoder_threads, gamma)
             if len(trajectory) != args.frames or len(au) != args.frames:
                 raise RuntimeError("Incomplete PPO Validation trajectory")
             result_pair = {"val_index": v, "video_id": vid, "target_kbps": rate,
@@ -201,6 +214,9 @@ def run(args):
         "baseline_lock_sha256": locked["lock_sha256"], "detector": state['detector'],
         "encoder_threads": args.encoder_threads, "decoder_threads": args.decoder_threads,
         "beta": args.beta, "elapsed_seconds": state['elapsed_seconds'],
+        "gamma": gamma, "validation_version": VALIDATION_VERSION,
+        "checkpoint_selection_metric": SELECTION_METRIC,
+        **macro_objective_metrics(details),
         "pairs": details,
         "macro_ppo_score": sum(x["ppo"]["score"] for x in details)/len(details),
         "macro_vanilla_score": sum(x["vanilla"]["score"] for x in details)/len(details),
