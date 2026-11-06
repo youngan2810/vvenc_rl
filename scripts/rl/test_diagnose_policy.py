@@ -12,7 +12,7 @@ import torch
 
 import diagnose_policy as d
 from full_train import atomic_checkpoint,train_checkpoint
-from ppo_agent import PPOActorCritic,PPOTrainer
+from ppo_agent_legacy import PPOActorCritic,PPOTrainer
 from reward_metrics import Detection,calculate_frame_reward
 
 

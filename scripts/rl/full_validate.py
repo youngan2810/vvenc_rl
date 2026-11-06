@@ -38,7 +38,9 @@ def vanilla_encode(encoder: Path, source: Path, output: Path, frames: int,
     output.mkdir(parents=True, exist_ok=False)
     stream = output / "vanilla.266"
     env = dict(os.environ)
-    for key in ("VVENC_RL_QP_MAP", "VVENC_RL_ACTION_DIR", "VVENC_RL_STATE_FILE", "VVENC_RL_AU_BITS_FILE"):
+    for key in list(env):
+        if not key.startswith('VVENC_RL_'):
+            continue
         env.pop(key, None)
     cmd = [str(encoder), "-i", str(source), "-s", f"{W}x{H}",
            "-r", str(FPS), "-f", str(frames), "-c", "yuv420",

@@ -5,7 +5,7 @@ Each epoch uses each Train ID once at each of the five target rates, i.e.
 325 independent video-window episodes. PPO is updated only after genuine
 encode/decode/frozen-YOLO reward collection. No Val/Test sample is trained on.
 
-IMPORTANT: v2 CTU-local Actor is incompatible with the older pilot checkpoint.
+IMPORTANT: v3 independent actor/critic is incompatible with v2/pilot checkpoints.
 Use a new output directory. Do not report a gain before paired validation.
 """
 from __future__ import annotations
@@ -33,7 +33,6 @@ from verify_real_ppo_update import (read_real_rollout,
 
 RATES = (50, 80, 120, 160, 200)
 TRAINING_SCHEMA = "vvenc-ppo-full-training/1"
-SOURCE_COMMIT = "5a76b04c4d958143ff5cab821196a5051458a655"
 
 
 def atomic_json(path: Path, obj: dict) -> None:
@@ -84,7 +83,7 @@ def checkpoint_bundle(root: Path, progress: dict) -> Path:
 
 
 def create_schedule(seed: int, epochs: int) -> list[dict]:
-    """Deterministic 65 x 5 balanced schedule; shuffled within each epoch."""
+    """Interleave all 65 videos before repeating one at another target rate."""
     if epochs <= 0:
         raise ValueError("epochs must be positive")
     plan = []
@@ -92,11 +91,15 @@ def create_schedule(seed: int, epochs: int) -> list[dict]:
         rng = random.Random(seed + 104729 * epoch)
         indices = list(range(65))
         rng.shuffle(indices)
+        rates_by_video = {}
         for idx in indices:
             rates = list(RATES)
             rng.shuffle(rates)
-            for rate in rates:
-                plan.append({"epoch": epoch, "train_index": idx, "rate": rate})
+            rates_by_video[idx] = rates
+        for round_index in range(len(RATES)):
+            for idx in indices:
+                plan.append({"epoch": epoch, "train_index": idx,
+                             "rate": rates_by_video[idx][round_index]})
     return plan
 
 
@@ -123,13 +126,13 @@ def train_checkpoint(model: PPOActorCritic, trainer: PPOTrainer, iteration: int,
                      config: dict, locksha: str, metrics: dict) -> dict:
     return {
         "schema": TRAINING_SCHEMA,
-        "model_version": MODEL_VERSION,
+        "model_version": model.model_version,
         "model_state": model.state_dict(),
         "optimizer_state": trainer.optimizer.state_dict(),
         "ppo_iteration": iteration,
         "training_config": config,
         "baseline_lock_sha256": locksha,
-        "source_commit": config.get("source_commit", SOURCE_COMMIT),
+        "source_commit": config["source_commit"],
         "ppo_hparams": trainer.hyperparameters(),
         "metrics": metrics,
         "torch_rng_state": torch.get_rng_state(),
@@ -147,6 +150,7 @@ def load_trainer(checkpoint: Path, expected_config: dict, locksha: str):
     if (obj.get("schema") != TRAINING_SCHEMA
             or obj.get("model_version") != MODEL_VERSION
             or obj.get("training_config") != expected_config
+            or obj.get("source_commit") != expected_config.get("source_commit")
             or obj.get("baseline_lock_sha256") != locksha):
         raise ValueError("Incompatible training checkpoint; do not mix architectures or plans")
     model = PPOActorCritic()
@@ -187,8 +191,12 @@ def run(args) -> None:
         raise RuntimeError("Incorrect Train split")
     locksha = locked["lock_sha256"]
     schedule = create_schedule(args.seed, args.epochs)
+    source_commit = subprocess.check_output(
+        ['git','-C',str(args.repo),'rev-parse','HEAD'],text=True).strip()
+    if subprocess.check_output(['git','-C',str(args.repo),'status','--porcelain','--untracked-files=no'],text=True).strip():
+        raise ValueError('Training requires a clean committed source checkout')
     config = {"seed": args.seed, "epochs": args.epochs, "frames": args.frames,
-              "beta": args.beta, "rates": list(RATES), "source_commit": SOURCE_COMMIT,
+              "beta": args.beta, "rates": list(RATES), "source_commit": source_commit,
               "model_version": MODEL_VERSION}
     root = args.output
     root.mkdir(parents=True, exist_ok=True)

@@ -205,12 +205,16 @@ def run(args) -> None:
                                             text=True).strip()
     if len(source_commit) != 40:
         raise RuntimeError("Could not pin source commit")
+    if subprocess.check_output(['git','-C',str(args.repo),'status','--porcelain','--untracked-files=no'],text=True).strip():
+        raise ValueError('Training requires a clean committed source checkout')
     cfg = {"seed": args.seed, "epochs": args.epochs, "frames": args.frames,
            "beta": args.beta, "rates": list(RATES), "source_commit": source_commit,
            "model_version": MODEL_VERSION, "parallel_collectors": COLLECTORS,
            "collector_runner_sha256": sha256_file(Path(__file__).resolve()),
            "update_unit": "one_PPO_update_per_fresh_pair",
            "session_version": 3, "ppo_update_version": PPO_UPDATE_VERSION,
+           "schedule_version": "interleaved-65-videos-v2",
+           "entropy_regularizer": "exact-quantized-delta-qp",
            "encoder_threads": args.encoder_threads, "decoder_threads": args.decoder_threads,
            "run_validation": args.run_validation,
            "validation_frames": args.validation_frames}

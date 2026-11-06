@@ -25,8 +25,8 @@ import zipfile
 import numpy as np
 import torch
 
-from full_train import atomic_json, load_trainer
-from ppo_agent import PPOActorCritic, compute_gae, estimate_kl
+from full_train import atomic_json
+from ppo_agent_legacy import PPOActorCritic, PPOTrainer, compute_gae, estimate_kl
 from real_reward_pilot import sha256_file
 
 OFFICIAL_COMMIT = 'e0b586c46f61e2ebbf131e4eb83f98817ff6e374'
@@ -150,7 +150,16 @@ def replay_update(checkpoint, config, rows, seed, expected_metrics):
     """Actual PPO update on a private model/Adam, with observational hooks only."""
     from verify_real_ppo_update import validate_unchanged_collecting_policy
     before_hash = sha256_file(checkpoint)
-    _, model, trainer = load_trainer(checkpoint, config, LOCK_SHA)
+    state = torch.load(checkpoint, map_location='cpu', weights_only=True)
+    if (state.get('schema') != 'vvenc-ppo-full-training/1'
+            or state.get('model_version') != 'spatial-ctu-head-v2'
+            or state.get('training_config') != config
+            or state.get('baseline_lock_sha256') != LOCK_SHA):
+        raise ValueError('Expected an original v2 diagnostic checkpoint')
+    model = PPOActorCritic()
+    model.load_state_dict(state['model_state'], strict=True)
+    trainer = PPOTrainer(model, **state['ppo_hparams'])
+    trainer.optimizer.load_state_dict(state['optimizer_state'])
     rollout=[];parities=[];begin=0
     for i,row in enumerate(rows):
         if row['done']:

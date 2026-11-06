@@ -150,7 +150,9 @@ def checkpoint_and_verify(
         "model_state": trainer.model.state_dict(),
         "optimizer_state": trainer.optimizer.state_dict(),
         "model_hparams": {
-            "lr": 3e-4, "gamma": trainer.gamma, "gae_lambda": trainer.gae_lambda,
+            "lr": trainer.optimizer.param_groups[0]['lr'],
+            "critic_learning_rate": trainer.optimizer.param_groups[1]['lr'],
+            "gamma": trainer.gamma, "gae_lambda": trainer.gae_lambda,
             "clip_eps": trainer.clip_eps, "epochs": trainer.epochs,
             "minibatch_size": trainer.minibatch_size, "target_kl": trainer.target_kl,
             "value_coef": trainer.value_coef, "entropy_coef": trainer.entropy_coef,
@@ -185,6 +187,7 @@ def checkpoint_and_verify(
         restored_model.load_state_dict(restored["model_state"], strict=True)
         restored_trainer = PPOTrainer(
             restored_model, learning_rate=restored["model_hparams"]["lr"],
+            critic_learning_rate=restored["model_hparams"]["critic_learning_rate"],
             gamma=restored["model_hparams"]["gamma"],
             gae_lambda=restored["model_hparams"]["gae_lambda"],
             clip_eps=restored["model_hparams"]["clip_eps"],
@@ -263,6 +266,7 @@ def one_true_rollout_update(
         hp = prev["model_hparams"]
         trainer = PPOTrainer(
             model, learning_rate=hp["lr"], gamma=hp["gamma"],
+            critic_learning_rate=hp["critic_learning_rate"],
             gae_lambda=hp["gae_lambda"], clip_eps=hp["clip_eps"],
             epochs=hp["epochs"], minibatch_size=hp["minibatch_size"],
             target_kl=hp["target_kl"], value_coef=hp["value_coef"],

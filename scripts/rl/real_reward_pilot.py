@@ -260,7 +260,9 @@ def encode_with_ppo(
             raise RuntimeError("PPO bridge quit early: " + (out / "bridge.log").read_text(errors="replace"))
 
         env = dict(os.environ)
-        for key in ("VVENC_RL_QP_MAP", "VVENC_RL_ACTION_DIR", "VVENC_RL_STATE_FILE", "VVENC_RL_AU_BITS_FILE"):
+        for key in list(env):
+            if not key.startswith('VVENC_RL_'):
+                continue
             env.pop(key, None)
         env["VVENC_RL_ACTION_DIR"] = str(action_dir)
         env["VVENC_RL_STATE_FILE"] = str(state_file)

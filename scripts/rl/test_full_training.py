@@ -53,7 +53,8 @@ class FullTrainingTests(unittest.TestCase):
             (root / "checkpoints").mkdir()
             model = PPOActorCritic()
             trainer = PPOTrainer(model, epochs=5, minibatch_size=64)
-            config = {"seed": 1, "epochs": 1, "model_version": MODEL_VERSION}
+            config = {"seed": 1, "epochs": 1, "model_version": MODEL_VERSION,
+                      "source_commit": "test-source"}
             ckpt = root / "checkpoints/ckpt_iter_000000.pt"
             atomic_checkpoint(ckpt, train_checkpoint(model, trainer, 0, config, "lock", {}))
             from real_reward_pilot import sha256_file

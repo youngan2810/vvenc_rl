@@ -1,5 +1,13 @@
 # VVenC-RL: PPO-QP for Object Detection
 
+**Current branch: fresh-run v3 after the EP467 audit.** Training at this HEAD
+uses `spatial-ctu-independent-ln-v3` and cannot resume the EP68/325/467 v2
+weights. Preserve those exports and use their original pinned source
+`e0b586c46f61e2ebbf131e4eb83f98817ff6e374` for legacy training/inference.
+See [Fresh-run v3](#fresh-run-v3-after-the-ep467-audit) below for current settings.
+Older stage-by-stage instructions describe the original experiment, not a
+checkpoint migration to v3. `ppo_agent_legacy.py` is for old offline diagnostics.
+
 Research implementation of PPO-Clip rate control on top of
 [VVenC v1.14.0](https://github.com/fraunhoferhhi/vvenc), the Fraunhofer H.266/VVC
 encoder. The current agent adjusts spatial delta-QP maps to preserve frozen
@@ -10,7 +18,106 @@ This is the single project guide. Kaggle provides compute: check out a pinned
 commit, build the codecs, attach the locked inputs and invoke the source CLI.
 Training code must not be embedded or rewritten inside a notebook.
 
-## Source layout and agent
+## Fresh-run v3 after the EP467 audit
+
+The original run reached467episodes /234PPO updates. Complete EP325 validation
+gained0.292 F1 percentage points while using3.31% more bitrate. All its
+deterministic actions were-2. Later probes showed EP325/467 byte-identical to
+fixed-2 on four sampled clip/rate pairs. On1024common probe states, fusion
+tanh saturation was99.66% atEP68 and100% atEP325/467; EP467 value std was about
+5.1e-5. These observations identify failure modes, not a proven single cause.
+195/200later updates hit KL stopping, also stopping critic fitting in v2.
+Large value loss alone does not prove critic gradients dominate the actor.
+Frame/POC, AU accounting, actual weight changes and checkpoint history passed.
+
+### Current changes
+
+- Independent actor/critic parameters. The actor retains the local CNN,
+  4x3CTU head, xy coordinates and8global encoder statistics; LayerNorm/SiLU
+  replace the saturated fusion tanh. The critic consumes all36spatial+8global
+  features through two normalized128-unit hidden layers and an unbounded
+  scalar output. No downstream detector enters inference.
+- Orthogonal initialization, actor output gain0.01 and critic gain1.0. Fresh
+  deterministic actions start at zero; the codec gate verifies equality with
+  vanilla and fixed-zero bitstreams.
+- Keep Gaussian latent ->2*tanh ->round and the correct latent likelihood/
+  Jacobian for PPO ratios. Exploration uses exact entropy of the actual five
+  integer choices per cell, computed by Normal CDF at
+  atanh(-.75,-.25,.25,.75), summed over12conditionally independent cells.
+  Log Gaussian/quantized entropy separately. Latent PPO was not mathematically
+  invalid; the old Gaussian entropy proxy did not measure integer exploration.
+- Actor LR1e-4, critic LR3e-4, Adam eps1e-5; independent gradient clipping0.5.
+  One serialized Adam with disjoint parameter groups preserves exact resume.
+  `optimizer_steps` counts actor updates, `critic_optimizer_steps` counts value
+  updates. KL stopping freezes actor gradients, including Adam momentum, while
+  the critic finishes planned minibatches. Sampled KL is not a strict bound or
+  a rollback. Keep gamma.99, GAE lambda.95, clip.2, epochs5, minibatch64,
+  targetKL.03, valuecoef.5, entropycoef.01.
+- Interleave all65Train videos before repeating a video at its next rate;
+  each epoch still has exactly65x5=325pairs. Preserve window selection, split
+  locks, QPA/profile, output-POC auditing, episode GAE boundaries, two frozen
+  collectors and atomic progress/bundles. Sanitize inherited VVENC_RL settings.
+- Reward stays frame-level pseudo-reference F1 (documented empty-reference
+  rule) minus.1*absolute log cumulative rate error in policy decision order.
+  Validation selection stays aggregate clip F1 minus final rate penalty.
+  These can disagree: validation score is not mean training reward. Assess
+  actual-rate RD curves and fixed-map controls, not F1 alone.
+- Original diagnostic replays explicitly use `ppo_agent_legacy.py`; new
+  trainer/bridge reject old architecture checkpoints. Never disable source,
+  config or hash checks to resume EP467 in v3.
+
+### Research basis and limitations
+
+[RL-RC-DoT, Gadot et al., CVPR2025](https://arxiv.org/html/2501.12216v2)
+uses PPO, Gaussian block actions and a self-supervised task/rate objective,
+plus a local reward-prediction auxiliary head. Our VVC/QPA, F1, encoder-order
+and CTU-state adaptations differ from its x264/precision setup. The auxiliary
+head is not implemented here. Do not claim an exact reproduction or transfer
+its published gains to VVenC.
+
+[Andrychowicz et al., ICLR2021](https://arxiv.org/html/2006.05990v1), sections3.2/3.3,
+motivates independent value networks, initialization and normalization.
+Its continuous-control results do not prove our LayerNorm/SiLU or quantized
+entropy choices for VVC: these are hypotheses motivated by measured failures.
+[PPO](https://arxiv.org/abs/1707.06347) and
+[GAE](https://arxiv.org/abs/1506.02438) provide the retained objectives.
+[Implementation Matters](https://arxiv.org/abs/2005.12729) motivates measuring
+implementation choices. No downstream-task gain for v3 is established yet.
+
+### Fresh-run checks and procedure
+
+Run `python -m unittest discover -s scripts/rl -p 'test_*.py'` and then the
+source CLI `scripts/rl/restart_preflight.py` with `--repo`, `--encoder`,
+`--decoder` and a NEW `--output` directory. The real codec gate uses32synthetic
+frames, requires the decoder output-POC auditor and performs no YOLO/optimizer
+step. It verifies vanilla/zero/fresh deterministic PPO bitstream equality,
+stochastic action transport, inference parity and actual decode mapping.
+CPU tests cover probability/entropy gradients, synthetic state-dependent value
+learning after actor KL stopping, independent parameters, old-checkpoint
+rejection and exact seeded resume. Synthetic tests are not task-performance
+evidence.
+
+Local verification:79 CPU tests passed. A real32-frame, four-encode native
+Windows codec/bridge preflight passed; deterministic/stochastic bridge
+log-probability/value errors were zero and both output-POC audits passed.
+Windows binary hashes differ from the pinned Linux/Kaggle binaries. The
+notebook repeats the gate using the canonical Kaggle codecs before collecting
+real rewards. No new GPU task training or v3 quality gain is claimed here.
+
+Use the pinned v3 notebook and a new run ID. Under a short deadline, choose
+one epoch BEFORE starting:325episodes, all65Train/7Val videos, five rates and
+256frames. Collect10episodes first, resume the SAME run for90more to inspect
+100, then max-episodes0 to finish325 plus35-pair validation. Session limits
+count additional episodes. Do not change source, epochs, seed or PPO settings
+on resume. A successful bounded session is not complete training/validation.
+Monitor critic variation/explained variance against nonconstant returns,
+integer histograms/entropy, actor/value step counts, gradients and rate/task
+outcomes. A uniform map alone is not an automatic failure: compare controls.
+Select/freeze by Val, then run100Test videos at the SAME full-clip protocol as
+the completed baseline. Never replace full Test clips with256frames or tune
+on Test. One seed/epoch is budget-limited, not a convergence guarantee.
+
+## Source layout and original experiment
 
 | Location | Responsibility |
 | --- | --- |

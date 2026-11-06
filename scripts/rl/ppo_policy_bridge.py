@@ -73,6 +73,8 @@ def main():
     if a.trajectory_file.exists():
         p.error("trajectory file already exists; use a new episode path")
 
+    # Single-frame inference should not launch a large CPU thread pool.
+    torch.set_num_threads(1)
     torch.manual_seed(a.seed)
     model = PPOActorCritic().eval()
     if a.checkpoint:
