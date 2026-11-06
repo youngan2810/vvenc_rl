@@ -314,3 +314,67 @@ manifest export must be updated to call the audited upgrade and carry its
 provenance; do not change hashes or disable checks to make it accept a bundle.
 A source CLI smoke above does not by itself create a notebook-compatible
 OFFICIAL_SESSION_EXPORT manifest. Keep original archives and export provenance.
+
+
+## Isolated EP467 policy diagnostics
+
+`scripts/rl/diagnose_policy.py` diagnoses saturation without advancing official
+training. Its source commit is separate from the official e0b586c training pin.
+The original PPO, reward, bridge, encoder and training scripts are unchanged.
+Do not migrate official checkpoints merely to use this diagnostic addition.
+Build/reuse the canonical encoder and inference bridge from a clean worktree at
+e0b586c46f61e2ebbf131e4eb83f98817ff6e374, retaining the existing codec hashes.
+Run the new diagnostic CLI from its separately pinned tools checkout/worktree.
+
+Required inputs are the verified 68-episode EXPORT_2 and 467-episode EXPORT_3,
+each as an intact official export ZIP or a Kaggle-expanded directory containing
+its manifest. The reader supports nested ZIPs and expanded nested folders.
+It does not execute anything from an archive and loads tensors weights-only.
+
+```bash
+python /kaggle/working/vvenc_diagnostic_tools/scripts/rl/diagnose_policy.py \
+  --mode offline --export2 /kaggle/input/phase-3 \
+  --export3 /kaggle/input/phase-4 \
+  --output /kaggle/working/vvc_ppo_ep467_diagnostics
+```
+
+Offline output includes exact post-quantization Gaussian action probabilities,
+conditional discrete entropy, continuous Gaussian entropy, deterministic action
+maps, and actual PPOTrainer.update replays for update35 (checkpoint68) and
+update164 (checkpoint325), with policy/value gradient contributions and per-step
+clipping/KL observations. Updated replay models/optimizers are discarded. Input
+checkpoints are checked before/after and never overwritten or exported as new
+training checkpoints. Replays are diagnostic, not additional official updates.
+
+Recorded EP325 validation actions are verified against checkpoint325. EP68/467
+actions on those stored states are labeled offline comparisons, not fresh
+validation trajectories. Piecewise-linear comparisons of F1 at equal bitrate
+use only the overlapping actual-rate range per video; they are not BD-rate or
+held-out Test results. CPU integration on the real exports reproduced optimizer
+step counts 4/6 for updates35/164 with original checkpoint hashes unchanged.
+
+For small fresh probes, attach the same BDD100K and baseline lock inputs and
+build the separate output-POC decoder auditor as documented above. At least one
+CUDA GPU is needed for frozen YOLO. Default probes use validation indices0,1,
+256frames, rates80,120: 32 encodes total (vanilla, fixed -2/-1/0/+1/+2,
+deterministic checkpoint325 and checkpoint467). No Train/Test videos are encoded
+in this stage and no optimizer is run in the online stage.
+
+```bash
+python /kaggle/working/vvenc_diagnostic_tools/scripts/rl/diagnose_policy.py \
+  --mode online --output /kaggle/working/vvc_ppo_ep467_diagnostics \
+  --repo /kaggle/working/vvenc_rl_source \
+  --encoder /kaggle/working/vvenc_rl_source/bin/release-static/vvencapp \
+  --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
+  --val-indices 0,1 --rates 80,120 --frames 256 --threads 4
+```
+
+Each completed method is committed atomically to probe_progress.json and can
+resume with identical settings. Re-runs preserve incomplete attempts under fresh
+names. The diagnostic compares both exact training-style mean frame/cumulative
+rate rewards and aggregate validation scores, preserving policy decision order.
+It requires zero-map/vanilla bitstream equality. For a policy issuing all -2,
+it requires equality with the fixed -2 bitstream before interpreting scores.
+Large decoded YUV is removed after each decode; logs, hashes, action maps,
+detections and small bitstreams are kept. Report exports must exclude temporary
+YUV and be named DIAGNOSTIC, not OFFICIAL_SESSION or training resume archives.
