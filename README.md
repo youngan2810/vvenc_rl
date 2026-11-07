@@ -1,5 +1,29 @@
 # VVenC-RL: PPO-QP for Object Detection
 
+## Complete-line bridge repair and v3 EP471 recovery (2026-11-07)
+
+The v3 run collected EP473 but stopped at committed EP471: the other worker's
+bridge parsed a partially appended STATE line (28 fields instead of 46) during
+EP472. A growing regular file can return a nonempty, unfinished `readline()`.
+The bridge now buffers fragments until newline; malformed complete records and
+idle timeouts still fail. Policy sampling, PPO, reward, codecs and schedule are
+unchanged. Fragmented/full-line process tests preserve identical trajectories.
+
+`--allow-bridge-io-upgrade` explicitly accepts only the verified original v3
+EP471 checkpoint `17aced9b0449e3d27344b826b10bbf5dbde491a46397660e73d10444ddc82543`.
+It checks a clean source diff restricted to this IO repair, backs up progress,
+records original/new source configs, and preserves checkpoint bytes, Adam/RNG
+state and all history. The first new update loads the original collecting
+checkpoint config; subsequent checkpoints use the repaired source provenance.
+Portable resume also works if interrupted before that first new update.
+Do not edit pinned files in place or bypass the config/hash checks.
+
+For this recovery, resume 471 with a bounded `--max-episodes 180`, which ends at
+650 (179 additional episodes), then performs the normal seven-video/five-rate
+validation. Recollect both EP472 and EP473; never reuse the uncommitted half-pair.
+Keep three epochs/975 total. This IO repair does not establish improved learning
+or detection quality; select the final checkpoint using paired Validation.
+
 **Current branch: fresh-run v3 after the EP467 audit.** Training at this HEAD
 uses `spatial-ctu-independent-ln-v3` and cannot resume the EP68/325/467 v2
 weights. Preserve those exports and use their original pinned source

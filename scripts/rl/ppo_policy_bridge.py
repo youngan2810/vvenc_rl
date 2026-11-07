@@ -100,15 +100,21 @@ def main():
 
     with a.state_file.open("r", encoding="utf-8") as src, \
          a.trajectory_file.open("w", encoding="utf-8") as trajectory:
+        pending = ""
         while len(observed) < a.frames:
-            line = src.readline()
-            if not line:
+            chunk = src.readline()
+            if chunk:
+                pending += chunk
+            # A regular file at its current EOF may expose an unfinished line.
+            # Preserve it until the encoder publishes the newline delimiter.
+            if not pending.endswith("\n"):
                 if time.monotonic() - last_activity > a.idle_timeout:
                     raise TimeoutError(
                         f"Policy waited for observation: got {len(observed)} / {a.frames}"
                     )
                 time.sleep(0.02)
                 continue
+            line, pending = pending, ""
             last_activity = time.monotonic()
             poc, globals_, spatial = parse_observation(line)
             if poc in observed:

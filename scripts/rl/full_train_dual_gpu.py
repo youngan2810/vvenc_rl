@@ -231,6 +231,9 @@ def run(args) -> None:
     locksha = lock["lock_sha256"]
     if progress_path.is_file():
         progress = json.loads(progress_path.read_text())
+        if getattr(args, "allow_bridge_io_upgrade", False):
+            from bridge_io_upgrade import upgrade_progress
+            progress = upgrade_progress(args.repo, root, progress, cfg, locksha)
         if getattr(args, "allow_alignment_upgrade", False):
             from alignment_upgrade import upgrade_progress
             progress = upgrade_progress(args.repo, root, progress, cfg, locksha)
@@ -295,7 +298,7 @@ def run(args) -> None:
                                             args.worker_timeout, args.encoder_threads,
                                             args.decoder_threads)
         worker_sec = {w["step"]: w["elapsed_sec"] for w in workers}
-        from alignment_upgrade import load_compatible_trainer
+        from bridge_io_upgrade import load_compatible_trainer
         _, model, trainer = load_compatible_trainer(checkpoint, cfg, locksha, progress)
         all_rollout = []
         summaries = []
@@ -403,6 +406,8 @@ def main():
                    help="Restore a v3 source-managed bundle into an empty --output")
     p.add_argument("--allow-alignment-upgrade", action="store_true",
                    help="Explicit audited ec6 EP58 alignment-only upgrade")
+    p.add_argument("--allow-bridge-io-upgrade", action="store_true",
+                   help="Audited complete-line IO repair of the verified v3 EP471 run")
     args = p.parse_args()
     if not 32 <= args.validation_frames <= 512 or args.worker_timeout < 60:
         p.error("Invalid validation frame count / worker timeout")
