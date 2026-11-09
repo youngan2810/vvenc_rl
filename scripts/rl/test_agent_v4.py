@@ -19,7 +19,7 @@ import torch
 from agent_v4 import SCHEMA, STATE_VERSION
 from agent_v4.checkpoint import load, save
 from agent_v4.model import Agent, ModelConfig, PPOConfig, Trainer, advantages
-from agent_v4.reward import RewardConfig, score, occupancy, join
+from agent_v4.reward import RewardConfig, score, occupancy, join, native_decision_rows
 from agent_v4.session import export_resume, restore, export_results
 from agent_v4.state import StateBuilder, SourceFrames, FRAME_BYTES, geometry, stack_states
 from au_rate_audit import AUBits
@@ -49,6 +49,21 @@ def experiment(mc, pc):
 
 
 class StateContracts(unittest.TestCase):
+    def test_content_mmap_is_released_before_file_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            p = Path(temp)/"source.yuv"
+            p.write_bytes(bytes([100])*FRAME_BYTES)
+            with SourceFrames(p,1) as source:
+                tensor = source.thumbnail(0)
+            p.unlink()  # Windows catches an unreleased memory map here.
+            self.assertEqual(float(tensor.float().mean()),100.)
+            with self.assertRaisesRegex(ValueError,"closed"):
+                source.thumbnail(0)
+
+    def test_missing_source_cannot_silently_disable_content(self):
+        with self.assertRaisesRegex(ValueError,"actual source"):
+            stack_states([],None,True)
+
     def test_causal_history_and_reordered_poc(self):
         b = StateBuilder(3)
         _, s0 = b.observe(line(0,0,3))
@@ -106,6 +121,48 @@ class StateContracts(unittest.TestCase):
 
 
 class RewardContracts(unittest.TestCase):
+    def test_baseline_uses_own_native_order_for_legacy_return(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/"states.txt"
+            path.write_text("".join(line(p,i,3) for i,p in enumerate([2,1,0])))
+            rows = native_decision_rows(path,3)
+            self.assertEqual([r["poc"] for r in rows],[2,1,0])
+            box = Detection(10,10,40,40)
+            src = {i:[box] for i in range(3)}
+            dec = {0:[box],1:[],2:[]}
+            aus = [AUBits(i+1,i,100,800,0) for i in range(3)]
+            config = RewardConfig(mode="legacy-frame")
+            own,_ = join(rows,aus,src,dec,24000,config,"val")
+            wrong,_ = join([{"poc":i} for i in range(3)],aus,src,dec,24000,config,"val")
+            discounted = lambda rr:sum(.99**i*r["reward"] for i,r in enumerate(rr))
+            self.assertNotAlmostEqual(discounted(own),discounted(wrong),places=6)
+
+    def test_clip_delta_policy_gradient_matches_terminal_objective(self):
+        # Enumerate a tiny causal two-decision environment, including a
+        # reference effect from action1 onto picture2. This checks objective
+        # credit assignment, rather than only the telescoping identity.
+        theta = torch.tensor(.3,dtype=torch.float64,requires_grad=True)
+        probability = theta.sigmoid()
+        expected_score = theta*0
+        score_gradient = theta*0
+        config = RewardConfig()
+        for a1 in (0,1):
+            for a2 in (0,1):
+                p1 = probability if a1 else 1-probability
+                p2 = probability if a2 else 1-probability
+                c1 = DetectionCounts(a1,0,1-a1)
+                tp2 = int(a1 or a2)
+                counts = DetectionCounts(a1+tp2,0,2-a1-tp2)
+                bits1 = 800+400*a1
+                prefix = score(c1,bits1,1,30000,config)
+                final = score(counts,bits1+800+400*a2,2,30000,config)
+                expected_score = expected_score+p1*p2*final
+                # Return_t = final - prefix_(t-1), gamma=lambda=1.
+                score_gradient = score_gradient+(p1*p2).detach()*((a1-probability)*final+
+                                      (a2-probability)*(final-prefix))
+        derivative = torch.autograd.grad(expected_score,theta)[0]
+        self.assertAlmostEqual(float(score_gradient.detach()),float(derivative),places=12)
+
     def test_telescoping_invariant_to_poc_order(self):
         box = Detection(10,10,40,40)
         src = {0:[box],1:[],2:[box]}
@@ -144,6 +201,61 @@ class RewardContracts(unittest.TestCase):
 
 
 class PolicyContracts(unittest.TestCase):
+    def test_default_content_ppo_matches_single_frame_bridge_and_updates_both_cnns(self):
+        torch.manual_seed(71)
+        model = Agent().eval()
+        trainer = Trainer(model,PPOConfig(epochs=1,minibatch=2))
+        state = batch(4)
+        state["image"].random_(16,236)
+        actions,lps,values = [],[],[]
+        with torch.no_grad():
+            for i in range(4):
+                a,lp,v,_ = model.sample({k:t[i:i+1] for k,t in state.items()})
+                actions.append(a);lps.append(lp);values.append(v)
+        actor_before = model.actor.image[0].weight.detach().clone()
+        critic_before = model.critic.image[0].weight.detach().clone()
+        model.train()
+        metrics = trainer.update(state,torch.cat(actions),torch.cat(lps),torch.cat(values),
+            torch.tensor([.2,-.1,.4,-.3]),torch.tensor([False,True,False,True]),
+            torch.tensor([[.1,0]*6,[0,.2]*6]*2))
+        self.assertLess(max(metrics["collector_parity"]),2e-4)
+        self.assertLessEqual(metrics["exact_final_kl"],trainer.config.target_kl)
+        self.assertFalse(torch.equal(actor_before,model.actor.image[0].weight))
+        self.assertFalse(torch.equal(critic_before,model.critic.image[0].weight))
+
+    def test_nan_policy_data_and_critic_are_rejected_before_update(self):
+        model = Agent(ModelConfig(content=False))
+        trainer = Trainer(model)
+        s = batch(2)
+        with torch.no_grad():
+            a,lp,v,_ = model.sample(s)
+        with self.assertRaisesRegex(ValueError,"old_logp"):
+            trainer.parity(s,a,lp*float("nan"),v)
+        with self.assertRaisesRegex(ValueError,"old_values"):
+            trainer.parity(s,a,lp,v*float("nan"))
+        with torch.no_grad():
+            model.value_head[-1].weight.fill_(float("nan"))
+        with self.assertRaisesRegex(ValueError,"Non-finite"):
+            trainer.parity(s,a,lp,v)
+        self.assertEqual(len(trainer.actor_optimizer.state),0)
+
+    def test_last_actor_step_cannot_bypass_full_batch_kl_guard(self):
+        torch.manual_seed(42)
+        model = Agent(ModelConfig(content=False))
+        trainer = Trainer(model,PPOConfig(epochs=1,minibatch=8,actor_lr=.3,target_kl=.001))
+        s = batch(8)
+        with torch.no_grad():
+            a,lp,v,_ = model.sample(s)
+        metrics = trainer.update(s,a,lp,v,torch.linspace(-1,1,8),
+            torch.tensor([False]*7+[True]),torch.ones(8,12))
+        self.assertGreater(metrics["proposed_final_kl"],trainer.config.target_kl)
+        self.assertLessEqual(metrics["exact_final_kl"],trainer.config.target_kl)
+        self.assertLess(metrics["accepted_actor_scale"],1)
+        self.assertTrue(metrics["actor_optimizer_reset"])
+        self.assertGreater(len(trainer.critic_optimizer.state),0)
+        # No stale full-step Adam moments survive a partial accepted step.
+        self.assertEqual(len(trainer.actor_optimizer.state),0)
+
     def test_action_only_control_preserves_legacy_backbone(self):
         from ppo_agent import PPOActorCritic
         legacy = PPOActorCritic()
@@ -242,7 +354,8 @@ class ExportAndIPCContracts(unittest.TestCase):
             root = Path(tmp)/"run"
             (root/"checkpoints").mkdir(parents=True)
             (root/"checkpoints/latest.pt").write_bytes(b"checkpoint")
-            p = {"latest_checkpoint":"checkpoints/latest.pt", "validations":[]}
+            p = {"latest_checkpoint":"checkpoints/latest.pt", "validations":[],
+                 "latest_sha256":hashlib.sha256(b"checkpoint").hexdigest()}
             (root/"progress.json").write_text(json.dumps(p))
             archive = export_resume(root,p)
             restored = Path(tmp)/"restored"
@@ -261,6 +374,36 @@ class ExportAndIPCContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 restore(corrupt,Path(tmp)/"nocorrupt")
             self.assertFalse((Path(tmp)/"nocorrupt").exists())
+
+    def test_corrupt_checkpoint_cannot_replace_last_good_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ckpt = root/"latest.pt"
+            ckpt.write_bytes(b"original")
+            p = {"latest_checkpoint":"latest.pt","latest_sha256":hashlib.sha256(b"original").hexdigest(),
+                 "validations":[]}
+            (root/"progress.json").write_text(json.dumps(p))
+            archive = export_resume(root,p)
+            before = archive.read_bytes()
+            ckpt.write_bytes(b"corrupted")
+            with self.assertRaisesRegex(ValueError,"checksum mismatch"):
+                export_resume(root,p)
+            self.assertEqual(archive.read_bytes(),before)
+            ckpt.write_bytes(b"original")
+            with self.assertRaisesRegex(ValueError,"committed"):
+                export_resume(root,{**p,"uncommitted_change":True})
+            self.assertEqual(archive.read_bytes(),before)
+
+    def test_collectors_reject_wrong_or_dirty_source(self):
+        from agent_v4.runtime import verify_source
+        with patch("agent_v4.runtime.subprocess.check_output",return_value="wrong"):
+            with self.assertRaisesRegex(ValueError,"source_commit"):
+                verify_source(Path("repo"),{"source_commit":"expected"})
+        with patch("agent_v4.runtime.subprocess.check_output",side_effect=["expected"," M model.py"]):
+            with self.assertRaisesRegex(ValueError,"clean"):
+                verify_source(Path("repo"),{"source_commit":"expected"})
+        with patch("agent_v4.runtime.subprocess.check_output",side_effect=["expected",""]):
+            verify_source(Path("repo"),{"source_commit":"expected"})
 
     def test_evidence_export_keeps_detections_bits_and_audits(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -370,7 +513,7 @@ class CoordinatorContracts(unittest.TestCase):
             decoder.write_bytes(b"decoder-fixture")
             (root/"vvdecapp_poc_audit").write_bytes(b"auditor-fixture")
             a = Namespace(repo=repo,decoder=decoder,output=root/"run",input_root=root/"input",
-                resume_archive=None,preset="encoder-history",reward=None,rate_mode="symmetric",
+                resume_archive=None,preset="content-task",reward=None,rate_mode="symmetric",
                 rate_tolerance=0.,beta=.1,auxiliary=0.,frames=32,validation_frames=32,epochs=1,
                 max_episodes=2,seed=19,workers=2,val_every_updates=25,worker_timeout=60,max_hours=10.)
             splits = {"train":[f"train{i}" for i in range(65)],"val":[f"val{i}" for i in range(7)],

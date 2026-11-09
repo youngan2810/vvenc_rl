@@ -5,14 +5,15 @@ import os
 
 import torch
 
-from agent_v4 import SCHEMA, MODEL_VERSION, STATE_VERSION
+from agent_v4 import SCHEMA, MODEL_VERSION, STATE_VERSION, UPDATE_VERSION
 from agent_v4.model import Agent, ModelConfig, PPOConfig, Trainer
 from agent_v4.reward import RewardConfig
 
 
 def save(path, model, trainer, experiment, iteration):
     state = {"schema": SCHEMA, "model_version": MODEL_VERSION,
-             "state_version": STATE_VERSION, "model_config": asdict(model.config),
+             "state_version": STATE_VERSION, "update_version": UPDATE_VERSION,
+             "model_config": asdict(model.config),
              "ppo_config": asdict(trainer.config), "experiment": experiment,
              "model_state": model.state_dict(), "iteration": iteration,
              "actor_optimizer": trainer.actor_optimizer.state_dict(),
@@ -30,8 +31,8 @@ def save(path, model, trainer, experiment, iteration):
 def load(path: Path, experiment=None, train=False):
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     if (ckpt.get("schema") != SCHEMA or ckpt.get("model_version") != MODEL_VERSION or
-            ckpt.get("state_version") != STATE_VERSION):
-        raise ValueError("Not an Agent v4 checkpoint; v3 requires its original runner")
+            ckpt.get("state_version") != STATE_VERSION or ckpt.get("update_version") != UPDATE_VERSION):
+        raise ValueError("Checkpoint model/state/update version differs; use its pinned original source")
     if experiment is not None and ckpt["experiment"] != experiment:
         raise ValueError("Resume experiment changed (source/config/codec/lock)")
     config = PPOConfig(**ckpt["ppo_config"])

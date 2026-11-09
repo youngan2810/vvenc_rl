@@ -60,6 +60,8 @@ python -u scripts/rl/agent_v4_train.py \
 
 90 là số **bổ sung**;0 là chạy phần còn lại. Pin lại `experiment.source_commit` trong progress của archive trước khi resume. Code, reward, seed, frame/window, workers và codec đổi thì phải run mới. Chỉ session cap và thời gian được thay đổi.
 
+Review ngày2026-11-09 thêm `update_version=categorical-clip-aux-fullbatch-kl-v2`. Checkpoint tạo bởi bản v4 đầu `6a43f41` vẫn cần source cũ đã pin; không tự nạp vào trainer vừa sửa. Nếu chưa training v4 thì dùng notebook mới để bắt đầu pilot mới.
+
 Driver cũng resume trực tiếp khi output cũ có progress hợp lệ. Nếu Kaggle giải nén Input ZIP, notebook v4 có bước tái đóng gói sau khi kiểm hash từng file theo `bundle_manifest.json`; không cần giữ nguyên byte của ZIP ngoài như bundle Test EP650.
 
 Progress chỉ commit sau khi cả batch có reward thật, LP/value parity PASS, PPO update và checkpoint đã ghi xong. Interrupted attempt có tên riêng và không được lấy làm rollout của policy tiếp theo. Pending Val phải hoàn tất trước khi collect tiếp.

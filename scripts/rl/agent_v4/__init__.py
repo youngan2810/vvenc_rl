@@ -3,4 +3,5 @@
 MODEL_VERSION = "ctu-categorical-content-history-v4.1"
 STATE_VERSION = "causal-ctu-source-history/1"
 SCHEMA = "vvenc-agent-v4/1"
+UPDATE_VERSION = "categorical-clip-aux-fullbatch-kl-v2"
 

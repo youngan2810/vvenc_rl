@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+import copy
 import math
 
 import torch
@@ -154,7 +155,7 @@ class PPOConfig:
         if (self.epochs < 1 or self.minibatch < 1 or
                 any(not math.isfinite(x) or x <= 0 for x in
                     (self.actor_lr, self.critic_lr, self.clip, self.target_kl, self.max_grad_norm)) or
-                not 0 <= self.gamma <= 1 or not 0 <= self.gae_lambda <= 1 or
+                not 0 < self.clip < 1 or not 0 <= self.gamma <= 1 or not 0 <= self.gae_lambda <= 1 or
                 any(not math.isfinite(x) or x < 0 for x in (self.entropy, self.auxiliary))):
             raise ValueError("Invalid PPO hyperparameters")
 
@@ -181,29 +182,63 @@ class Trainer:
 
     @torch.no_grad()
     def parity(self, state, actions, old_logp, old_values):
+        n = len(actions)
+        if (n < 1 or actions.shape != (n,12) or actions.dtype not in (torch.int32,torch.int64) or
+                not bool(((actions >= -2) & (actions <= 2)).all())):
+            raise ValueError("Expected a nonempty integer delta-QP batch [N,12]")
+        for name,t in (("old_logp",old_logp),("old_values",old_values)):
+            if t.shape != (n,) or not torch.isfinite(t).all():
+                raise ValueError("Invalid/non-finite " + name)
+        expected = {"local":(n,LOCAL_DIM,3,4), "global":(n,GLOBAL_DIM),
+                    "history":(n,HISTORY,HISTORY_DIM), "image":(n,1,160,240)}
+        if set(state) != set(expected):
+            raise ValueError("Missing/unexpected state channels")
+        for name,shape in expected.items():
+            t = state[name]
+            if tuple(t.shape) != shape or (t.is_floating_point() and not torch.isfinite(t).all()):
+                raise ValueError("Invalid/non-finite state: " + name)
+        if state["image"].dtype != torch.uint8:
+            raise ValueError("Source thumbnail must be uint8")
         errors = [0., 0.]
         for i in range(0, len(actions), self.config.minibatch):
             sl = slice(i, i+self.config.minibatch)
             d, v, _ = self.model({k:t[sl] for k,t in state.items()})
+            if not torch.isfinite(v).all() or not torch.isfinite(d.logits).all():
+                raise ValueError("Non-finite collecting policy/value")
             errors[0] = max(errors[0], float((d.log_prob(actions[sl]+2).sum(-1)-old_logp[sl]).abs().max()))
             errors[1] = max(errors[1], float((v-old_values[sl]).abs().max()))
         if max(errors) > 2e-4:
             raise ValueError(f"Off-policy/state parity failure: {errors}")
         return errors
 
+    @torch.no_grad()
+    def policy_log_probs(self, state):
+        size = self.config.minibatch
+        return torch.cat([self.model.policy_features({k:t[i:i+size] for k,t in state.items()})[0].logits
+                          for i in range(0,len(state["global"]),size)])
+
     def update(self, state, actions, old_logp, old_values, rewards, dones, occupancy):
         c = self.config
         parity = self.parity(state, actions, old_logp, old_values)
+        n = len(actions)
+        if (rewards.shape != (n,) or not torch.isfinite(rewards).all() or
+                dones.shape != (n,) or dones.dtype != torch.bool or
+                occupancy.shape != (n,12) or not torch.isfinite(occupancy).all() or
+                not bool(((occupancy >= 0) & (occupancy <= 1)).all())):
+            raise ValueError("Invalid reward/boundary/teacher batch")
         adv, returns = advantages(rewards, old_values, dones, c.gamma, c.gae_lambda)
         advantage_std = float(adv.std(unbiased=False))
         adv = (adv-adv.mean())/(adv.std(unbiased=False)+1e-8)
         actor_stopped, steps, actor_steps = False, 0, 0
         stats = {"policy_loss": [], "value_loss": [], "entropy": [], "auxiliary_loss": [], "kl": [], "clip_fraction": []}
+        actor_params = self.model.actor_parameters()
+        actor_before = [p.detach().clone() for p in actor_params]
+        optimizer_before = copy.deepcopy(self.actor_optimizer.state_dict())
         # Keep old probabilities for exact factorized categorical KL. Their
         # sum over CTUs is the KL of the conditional product distribution.
         with torch.no_grad():
-            old_probs = torch.cat([self.model({k:t[i:i+c.minibatch] for k,t in state.items()})[0].probs
-                                   for i in range(0, len(actions), c.minibatch)])
+            old_log_probs = self.policy_log_probs(state)
+            old_probs = old_log_probs.exp()
         for _ in range(c.epochs):
             for idx in torch.randperm(len(actions)).split(c.minibatch):
                 batch = {k:t[idx] for k,t in state.items()}
@@ -222,7 +257,7 @@ class Trainer:
                     pos_weight=aux.new_tensor(3.))
                 value_loss = .5*F.mse_loss(value, returns[idx])
                 with torch.no_grad():
-                    kl = (old_probs[idx]*(old_probs[idx].clamp_min(1e-12).log()-d.logits)).sum((1, 2)).mean().clamp_min(0)
+                    kl = (old_probs[idx]*(old_log_probs[idx]-d.logits)).sum((1, 2)).mean().clamp_min(0)
                 if kl > c.target_kl:
                     actor_stopped = True
                 if not actor_stopped:
@@ -245,11 +280,39 @@ class Trainer:
                     stats[key].append(float(val.detach()))
         with torch.no_grad():
             counts = torch.bincount((actions+2).flatten(), minlength=5).float()
-            final_probs = torch.cat([self.model({k:t[i:i+c.minibatch] for k,t in state.items()})[0].probs
-                                     for i in range(0, len(actions), c.minibatch)])
-            exact_kl = (old_probs*(old_probs.clamp_min(1e-12).log()-final_probs.clamp_min(1e-12).log())).sum((1, 2)).mean().clamp_min(0)
+            def measure():
+                log_probs = self.policy_log_probs(state)
+                kl = (old_probs*(old_log_probs-log_probs)).sum((1,2)).mean().clamp_min(0)
+                return log_probs, float(kl)
+            final_log_probs, exact_kl = measure()
+            proposed_kl = exact_kl
+            accepted_scale = 1.
+            # PPO clipping is not a hard KL bound. Check ALL rollout states,
+            # including after the last actor/aux step. Backtrack parameters
+            # if necessary and reset Adam moments to the pre-update state.
+            # This is an empirical rollout guard, not a population guarantee.
+            if not math.isfinite(exact_kl) or exact_kl > c.target_kl:
+                actor_stopped = True
+                proposed = [p.detach().clone() for p in actor_params]
+                for power in range(1,11):
+                    accepted_scale = .5**power
+                    for p,before,after in zip(actor_params,actor_before,proposed):
+                        p.copy_(before+accepted_scale*(after-before))
+                    final_log_probs,exact_kl = measure()
+                    if math.isfinite(exact_kl) and exact_kl <= c.target_kl:
+                        break
+                else:
+                    accepted_scale = 0.
+                    for p,before in zip(actor_params,actor_before):
+                        p.copy_(before)
+                    final_log_probs,exact_kl = measure()
+                self.actor_optimizer.load_state_dict(optimizer_before)
+            final_probs = final_log_probs.exp()
         return {**{k:sum(v)/len(v) for k,v in stats.items()},
-                "exact_final_kl": float(exact_kl), "actor_early_stop": actor_stopped,
+                "exact_final_kl": exact_kl, "actor_early_stop": actor_stopped,
+                "proposed_final_kl": proposed_kl if math.isfinite(proposed_kl) else None,
+                "accepted_actor_scale": accepted_scale,
+                "actor_optimizer_reset": accepted_scale < 1.,
                 "optimizer_steps": steps, "actor_steps": actor_steps,
                 "collector_parity": parity, "mean_reward": float(rewards.mean()),
                 "reward_std": float(rewards.std(unbiased=False)),

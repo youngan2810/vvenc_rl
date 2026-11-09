@@ -39,7 +39,20 @@ class SourceFrames:
         self.data = np.memmap(path, mode="r", dtype=np.uint8,
                               shape=(frames, FRAME_BYTES))
 
+    def close(self):
+        if self.data is not None:
+            self.data._mmap.close()
+            self.data = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
     def thumbnail(self, poc: int):
+        if self.data is None:
+            raise ValueError("Source frames already closed")
         if not 0 <= poc < self.frames:
             raise ValueError("Unexpected source POC")
         y = self.data[poc, :WIDTH*HEIGHT].reshape(HEIGHT, WIDTH)
@@ -117,6 +130,8 @@ class StateBuilder:
 
 
 def stack_states(rows, source: SourceFrames | None, use_content: bool):
+    if use_content and source is None:
+        raise ValueError("Content-enabled rollout requires the actual source frames")
     state = {k: torch.tensor([r[k] for r in rows], dtype=torch.float32)
              for k in ("local", "global", "history")}
     state["image"] = (torch.stack([source.thumbnail(r["poc"]) for r in rows])

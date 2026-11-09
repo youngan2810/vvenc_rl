@@ -12,7 +12,7 @@ import time
 
 import torch
 
-from agent_v4 import SCHEMA, MODEL_VERSION, STATE_VERSION
+from agent_v4 import SCHEMA, MODEL_VERSION, STATE_VERSION, UPDATE_VERSION
 from agent_v4.checkpoint import load, save
 from agent_v4.model import Agent, ModelConfig, PPOConfig, Trainer
 from agent_v4.reward import RewardConfig
@@ -160,7 +160,7 @@ def run(a):
                    gae_lambda=1. if reward_mode == "clip-delta" else .95,
                    auxiliary=a.auxiliary if a.auxiliary is not None else (.1 if mc.content else 0.))
     experiment = {"model_version":MODEL_VERSION, "state_version":STATE_VERSION,
-        "model_config":asdict(mc), "ppo_config":asdict(pc), "reward":asdict(rc),
+        "model_config":asdict(mc), "ppo_config":asdict(pc), "reward":asdict(rc), "update_version":UPDATE_VERSION,
         "preset":a.preset, "source_commit":source_commit,
         "encoder_sha256":sha256_file(encoder), "decoder_sha256":sha256_file(a.decoder),
         "auditor_sha256":sha256_file(auditor), "baseline_lock_sha256":lock["lock_sha256"],
@@ -239,8 +239,12 @@ def run(a):
                     raise ValueError("Missing or duplicate rollout POC")
                 if not rows[-1]["done"] or any(r["done"] for r in rows[:-1]):
                     raise ValueError("Incorrect GAE episode boundary")
-                source = SourceFrames(job["output"]/"reference_8bit.yuv", a.frames) if mc.content else None
-                batches.append((stack_states(rows, source, mc.content), rows))
+                if mc.content:
+                    with SourceFrames(job["output"]/"reference_8bit.yuv",a.frames) as source:
+                        collected_state = stack_states(rows,source,True)
+                else:
+                    collected_state = stack_states(rows,None,False)
+                batches.append((collected_state,rows))
                 summaries.append(summary)
             state = {k:torch.cat([b[0][k] for b in batches]) for k in batches[0][0]}
             rows = [r for _,rr in batches for r in rr]

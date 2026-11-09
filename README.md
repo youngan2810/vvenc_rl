@@ -13,6 +13,11 @@ EP650/v3 checkpoints and the ongoing EP650 Test evaluation use their original
 source. No v4 quality gain is claimed before real codec training/Validation.
 The sections below describe legacy work, not v4 training results.
 
+The [pre-pilot audit](docs/AGENT_V4_AUDIT_20261109.md) records additional
+fixes for non-finite data, final-step KL overshoot, baseline decision order,
+runtime source identity and resume archive integrity. These checks are not
+evidence of a measured v4 task-quality improvement.
+
 ## Complete-line bridge repair and v3 EP471 recovery (2026-11-07)
 
 The v3 run collected EP473 but stopped at committed EP471: the other worker's

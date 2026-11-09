@@ -20,6 +20,21 @@ RESUME_NAME = "VVC_AGENT_V4_RESUME.zip"
 
 
 def export_resume(root, progress):
+    # Never replace the last valid bundle with internally inconsistent data.
+    if json.loads((root/"progress.json").read_text()) != progress:
+        raise ValueError("Only committed on-disk progress may be exported")
+    expected = {progress["latest_checkpoint"]:progress["latest_sha256"]}
+    if progress.get("best_checkpoint"):
+        expected[progress["best_checkpoint"]] = progress["best_sha256"]
+    if progress.get("pending_validation"):
+        p = progress["pending_validation"]
+        expected[p["checkpoint"]] = p["sha256"]
+    for v in progress.get("validations", []):
+        if v["kind"] == "full":
+            expected[v["checkpoint"]] = v["sha256"]
+    for name,digest in expected.items():
+        if sha256_file(contained_path(root,name)) != digest:
+            raise ValueError("Checkpoint checksum mismatch; preserving previous resume bundle: " + name)
     paths = {root/"progress.json", root/progress["latest_checkpoint"]}
     if progress.get("best_checkpoint"):
         paths.add(root/progress["best_checkpoint"])

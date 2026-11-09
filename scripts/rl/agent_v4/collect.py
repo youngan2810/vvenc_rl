@@ -6,7 +6,8 @@ import time
 
 from agent_v4.checkpoint import load
 from agent_v4.codec import encode
-from agent_v4.reward import RewardConfig, join
+from agent_v4.reward import RewardConfig, join, native_decision_rows
+from agent_v4.runtime import verify_source
 from au_rate_audit import read_au_bits
 from decoder_alignment import verify_decode_mapping
 from full_train import atomic_json
@@ -34,8 +35,13 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
             start, rate, seed, deterministic=False, paired=False, zero_gate=False):
     ckpt, model, _ = load(checkpoint)
     exp = ckpt["experiment"]
+    verify_source(repo,exp)
     splits, records = read_lock_manifest(input_root)
     lock = read_baseline_config(input_root)
+    import hashlib
+    split_sha = hashlib.sha256(json.dumps(splits,sort_keys=True).encode()).hexdigest()
+    if split_sha != exp["split_ids_sha256"]:
+        raise ValueError("Collector split IDs differ from experiment")
     if split not in ("train", "val") or not 0 <= index < len(splits[split]):
         raise ValueError("Collector accepts locked Train/Val only; never Test")
     if split == "val" and (not deterministic or not paired or start != 0):
@@ -90,7 +96,8 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
         base = vanilla_encode(encoder, source, output/"vanilla", frames, rate, exp["encoder_threads"])
         base_boxes, base_mapping = decode_detect(decoder, detector, base, output/"vanilla", frames,
                                                  vid, exp["decoder_threads"])
-        base_rows, base_metrics = join(rows, read_au_bits(output/"vanilla"/"au_bits.csv", base, frames),
+        base_order = native_decision_rows(output/"vanilla"/"states.txt",frames)
+        base_rows, base_metrics = join(base_order, read_au_bits(output/"vanilla"/"au_bits.csv", base, frames),
                                source_boxes, base_boxes, rate*1000, reward_config, vid)
         base_metrics["selection_score"] = sum(gamma**i*r["reward"] for i,r in enumerate(base_rows))
         summary.update(vanilla=base_metrics, vanilla_alignment=base_mapping,

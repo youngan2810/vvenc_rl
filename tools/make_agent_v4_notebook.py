@@ -101,12 +101,24 @@ for path,branch,commit in ((REPO,'agent-v4-dev',SOURCE_COMMIT),(CODEC,'full-trai
     if not (path/'.git').exists():
         assert not path.exists(),path
         run(['git','clone','--branch',branch,'--depth','60','https://github.com/youngan2810/vvenc_rl.git',path])
+    if path==REPO and MODE=='new' and not commit:
+        assert not subprocess.check_output(['git','-C',str(path),'status','--porcelain','--untracked-files=no'],text=True).strip()
+        run(['git','-C',path,'fetch','origin','agent-v4-dev'])
+        run(['git','-C',path,'checkout','--detach','FETCH_HEAD'])
     if commit:
         if subprocess.run(['git','-C',str(path),'cat-file','-e',commit+'^{commit}'],capture_output=True).returncode:
             run(['git','-C',path,'fetch','origin',commit])
         run(['git','-C',path,'checkout','--detach',commit])
     assert not subprocess.check_output(['git','-C',str(path),'status','--porcelain','--untracked-files=no'],text=True).strip()
 SOURCE_COMMIT=subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
+# An interactive kernel may still hold imports from a previous checkout.
+# Training runs in fresh subprocesses; notebook-side export must match too.
+import importlib
+root_modules={p.stem for p in (REPO/'scripts/rl').glob('*.py')}
+for name in list(sys.modules):
+    if name=='agent_v4' or name.startswith('agent_v4.') or name in root_modules:
+        del sys.modules[name]
+importlib.invalidate_caches()
 sys.path.insert(0,str(REPO/'scripts/rl'))
 from real_reward_pilot import read_lock_manifest,read_baseline_config
 splits,records=read_lock_manifest(INPUT);locked=read_baseline_config(INPUT)

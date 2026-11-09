@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import math
 
 import torch
 
@@ -12,6 +13,7 @@ from agent_v4 import SCHEMA
 from agent_v4.checkpoint import load
 from agent_v4.session import export_results
 from agent_v4.train import request_validation, validate_pending
+from agent_v4.runtime import verify_source
 from real_reward_pilot import read_baseline_config, sha256_file
 from full_train_dual_gpu import initialize_detector_assets
 
@@ -25,13 +27,13 @@ def main():
     p.add_argument("--quick",action="store_true",help="4 pairs, diagnostic only")
     p.add_argument("--max-hours",type=float,default=11.5)
     a = p.parse_args()
+    if not math.isfinite(a.max_hours) or a.max_hours <= 0:
+        p.error("Invalid time budget")
     if not torch.cuda.is_available() or torch.cuda.device_count() < a.workers:
         p.error("Missing CUDA workers")
     ckpt,_,_ = load(a.checkpoint)
     exp = ckpt["experiment"]
-    commit = subprocess.check_output(["git","-C",str(a.repo),"rev-parse","HEAD"],text=True).strip()
-    if commit != exp["source_commit"]:
-        p.error("Checkout the source_commit recorded in the checkpoint before Validation")
+    verify_source(a.repo,exp)
     a.seed, a.validation_frames, a.worker_timeout = exp["seed"],exp["validation_frames"],1800
     progress_path = a.output/"progress.json"
     import json

@@ -3,10 +3,10 @@
   "date": "2026-11-09",
   "base_commit": "afaf5f0c463122067bd3ad6ba62f7913c799f900",
   "tests": {
-    "passed": 112,
+    "passed": 121,
     "legacy": 92,
-    "new_v4": 20,
-    "elapsed_seconds": 36.875
+    "new_v4": 29,
+    "elapsed_seconds": 61.746
   },
   "notebook": "schema-valid and every code cell compiled; not executed on Kaggle",
   "legacy_files_compared_unchanged": 47,
@@ -25,5 +25,22 @@
     "actor_only_batch1_ms": 3.7,
     "threads": 1,
     "interpretation": "local CPU thumbnail only; not codec/Kaggle timing"
+  },
+  "reviewed_commit": "6a43f41c0fea71d147213b4c8aef980ee7fe4f2a",
+  "update_version": "categorical-clip-aux-fullbatch-kl-v2",
+  "review_notes": "AGENT_V4_AUDIT_20261109.md",
+  "targeted_review_probes": {
+    "injected_nan_rejected": true,
+    "missing_content_rejected": true,
+    "corrupt_checkpoint_preserves_old_bundle": true,
+    "kl_stress_test": {
+      "actor_lr": 0.3,
+      "default_actor_lr": 0.0001,
+      "target": 0.001,
+      "proposed": 101.93501281738281,
+      "accepted": 0.00025872091646306217,
+      "accepted_actor_scale": 0.0009765625,
+      "scope": "synthetic fixture; not default Kaggle training"
+    }
   }
 }

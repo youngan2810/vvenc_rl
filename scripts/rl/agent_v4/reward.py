@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from agent_v4.state import cell_bounds
+from agent_v4.state import cell_bounds, StateBuilder
 from reward_metrics import DetectionCounts, match_one_to_one, calculate_frame_reward
 
 
@@ -71,7 +71,7 @@ def join(rows, aus, source, decoded, target_bps, config: RewardConfig, video_id)
     if not n or len(set(pocs)) != n or set(pocs) != set(range(n)):
         raise ValueError("Incomplete/duplicate policy POCs")
     au = {r.poc:r for r in aus}
-    if set(au) != set(pocs) or set(source) != set(pocs) or set(decoded) != set(pocs):
+    if len(aus) != n or set(au) != set(pocs) or set(source) != set(pocs) or set(decoded) != set(pocs):
         raise ValueError("AU/detection POC set mismatch")
     total = DetectionCounts(0, 0, 0)
     bits, previous, out = 0, 0., []
@@ -99,4 +99,19 @@ def join(rows, aus, source, decoded, target_bps, config: RewardConfig, video_id)
     return out, {**asdict(total), "f1": total.f1, "score": previous,
                  "actual_kbps": bits*30/n/1000, "bits": bits,
                  "reward_sum": sum(r["reward"] for r in out)}
+
+
+def native_decision_rows(path, frames):
+    """Baseline must use its OWN decision clock, particularly with gamma<1."""
+    builder = StateBuilder(frames, rich=False)
+    rows = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        poc,_ = builder.observe(line)
+        builder.commit_action([0]*12)
+        rows.append({"poc":poc})
+    if len(rows) != frames:
+        raise ValueError("Incomplete baseline native decision sequence")
+    return rows
 

@@ -61,6 +61,8 @@ flowchart TD
 
 Actor và critic có cùng loại input nhưng không dùng chung weights. Model không chạy YOLO trong actor inference. Validation dùng actor-only path, bỏ tính critic và auxiliary head. Khi thu thập Train, critic được chạy để lưu old values.
 
+Sau review, trainer có full-rollout KL guard sau bước actor cuối: backtrack nếu mean joint KL vượt target, phục hồi Adam moments khi giảm bước và lưu `accepted_actor_scale`. Đây là guard thực nghiệm trên batch, không phải bảo đảm return tăng. Chi tiết các lỗi và giới hạn được ghi trong [audit trước pilot](AGENT_V4_AUDIT_20261109.md).
+
 ### State và tính nhân quả
 
 `agent_v4/state.py` đọc nguyên định dạng native đã audit; không sửa C++ hay codec binary. State rich gồm:

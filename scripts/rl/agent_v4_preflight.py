@@ -54,11 +54,10 @@ def run(repo, encoder, decoder, output):
                 raise ValueError("Action file != recorded policy action")
         errors = None
         if not deterministic:
-            source_frames = SourceFrames(source,frames)
-            states = stack_states(rows,source_frames,True)
+            with SourceFrames(source,frames) as source_frames:
+                states = stack_states(rows,source_frames,True)
             errors = trainer.parity(states,torch.tensor([r["action"] for r in rows]),
                 torch.tensor([r["log_prob"] for r in rows]),torch.tensor([r["value"] for r in rows]))
-            del source_frames
         decoded = out/"decoded10.yuv"
         run_cmd([str(decoder),"-b",str(stream),"-o",str(decoded),"--threads","4"],out/"decode.log",timeout=600)
         mapping = verify_decode_mapping(stream,decoded,decoder,frames,4)
