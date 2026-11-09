@@ -1,0 +1,29 @@
+{
+  "schema": "vvenc-agent-v4-local-checks/1",
+  "date": "2026-11-09",
+  "base_commit": "afaf5f0c463122067bd3ad6ba62f7913c799f900",
+  "tests": {
+    "passed": 112,
+    "legacy": 92,
+    "new_v4": 20,
+    "elapsed_seconds": 36.875
+  },
+  "notebook": "schema-valid and every code cell compiled; not executed on Kaggle",
+  "legacy_files_compared_unchanged": 47,
+  "python": "3.11.9",
+  "torch": "2.9.1+cpu",
+  "system": "Windows-10-10.0.26200-SP0",
+  "native_codec_v4_preflight_executed": false,
+  "kaggle_gpu_v4_training_executed": false,
+  "limitations": [
+    "No v4 task-quality gain measured",
+    "Native codec and frozen-detector pilot still required on target Kaggle profile"
+  ],
+  "synthetic_cpu_benchmark": {
+    "model_parameters": 246343,
+    "actor_parameters_including_auxiliary": 74086,
+    "actor_only_batch1_ms": 3.7,
+    "threads": 1,
+    "interpretation": "local CPU thumbnail only; not codec/Kaggle timing"
+  }
+}

@@ -1,5 +1,18 @@
 # VVenC-RL: PPO-QP for Object Detection
 
+## Agent v4 development (2026-11-09)
+
+Branch `agent-v4-dev` adds an isolated QP agent: categorical CTU actions,
+causal encoder/history features, an optional source-luma CNN, train-only
+car-presence supervision, independent critic, aligned clip-return objective,
+two-GPU collection, paired Validation and checksummed resume/evidence exports.
+
+Read [design and research](docs/AGENT_V4_DESIGN.md) and
+[running/pilot instructions](docs/AGENT_V4_RUN.md). Start a **new** v4 run;
+EP650/v3 checkpoints and the ongoing EP650 Test evaluation use their original
+source. No v4 quality gain is claimed before real codec training/Validation.
+The sections below describe legacy work, not v4 training results.
+
 ## Complete-line bridge repair and v3 EP471 recovery (2026-11-07)
 
 The v3 run collected EP473 but stopped at committed EP471: the other worker's
