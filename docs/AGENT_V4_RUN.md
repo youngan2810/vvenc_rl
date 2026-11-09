@@ -10,6 +10,10 @@ Kaggle T4×2, Internet ON, cùng locked BDD100K Train00 MOV, dataset manifest65/
 
 Codec giữ canonical source `e0b586c46f61e2ebbf131e4eb83f98817ff6e374`. Build encoder từ checkout canonical riêng, chép executable vào `REPO/bin/release-static/vvencapp`; tránh nhúng Git version mới vào binary. Build VVdeC3.2.0 và output-POC auditor bằng `scripts/rl/build_vvdec_audit.py`. Driver yêu cầu đúng hai binary SHA256 đã kiểm thử, và lưu cả hash auditor.
 
+Encoder golden được build tại **`/kaggle/working/vvenc_rl_source`**, build directory `build`, Release với lệnh CMake đã khóa. Phải giữ đường dẫn này: macro CHECK/THROW của VVenC có `__FILE__`, nên source/build prefix có thể xuất hiện trong binary. Notebook v4 ban đầu dùng `vvenc_canonical_v4`, gây sai khác với điều kiện build golden. Đã khôi phục đường dẫn cũ; không whitelist hash khác chỉ từ một lần build. Compiler/flags cũng có thể ảnh hưởng hash, nên vẫn cần cả hai SHA assertions và native preflight.
+
+Nếu phiên hiện tại đã dừng ở assertion encoder SHA, chạy [cell khôi phục đường dẫn build](../notebooks/V4_Encoder_Build_Path_Recovery_Cell.py) trước cell lỗi rồi chạy lại cell lỗi. Encoder sẽ được build ở thư mục canonical cũ; decoder đã build ở đúng đường dẫn được dùng lại. Không cần sửa tracked source của Agent hoặc thay expected SHA. Nếu hash vẫn khác, dừng tại assertion để kiểm compiler/build metadata trước khi training.
+
 ```bash
 python -m unittest discover -s scripts/rl -p 'test_*.py'
 python scripts/rl/agent_v4_preflight.py --repo /kaggle/working/vvenc_rl_v4 \

@@ -42,5 +42,14 @@
       "accepted_actor_scale": 0.0009765625,
       "scope": "synthetic fixture; not default Kaggle training"
     }
-  }
+  },
+  "kaggle_reported_tests": {
+    "passed": 121,
+    "elapsed_seconds": 34.233,
+    "encoder_build_completed": true,
+    "decoder_build_completed": true,
+    "encoder_hash_assertion": "9cbc32b5abecae65eebb3c6ca7fcfacdbf6ac58d68c97a28afb6d6ee154fe377 != expected 856cee2e9f0e419423aff85c55fe8d01cfbd9b18e6847bd145bcde940080c2cb",
+    "training_started": false
+  },
+  "build_path_repair": "Restore /kaggle/working/vvenc_rl_source; keep golden hashes; native rebuild verification pending"
 }

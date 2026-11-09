@@ -45,3 +45,9 @@ PPO clipping không áp đặt một hard KL constraint trong thuật toán gố
 Chạy native preflight v4 trên profile codec Kaggle đã pin, rồi pilot10 episode mới và paired Val. Xem cả F1, actual bitrate, entropy, sampled/deterministic action, reward/return variance, LP parity và accepted actor scale. Quick4 pairs là diagnostic, không đủ chốt chất lượng. Full35-pair Val và đối chứng cùng interaction budget cần có trước khi tuyên bố v4 vượt v3.
 
 Các kiểm tra local là CPU contract/regression tests và notebook validation. Chưa chạy native v4 preflight hay v4 training T4×2 trong lượt review này. Kết quả cuối về bitrate/task quality còn mở.
+
+## Sai khác build-path phát hiện từ phiên Kaggle
+
+Kaggle đã PASS121 unit tests, build encoder/decoder thành công, rồi dừng trước preflight/training vì encoder SHA `9cbc32b5...` khác golden `856cee2e...`. Notebook ban đầu đổi thư mục canonical từ `vvenc_rl_source` thành `vvenc_canonical_v4` nhưng vẫn yêu cầu hash binary cũ. Đây là sai khác build recipe cần sửa.
+
+Source canonical `TypeDef.h` dùng `__FILE__` trong THROW/CHECK; [GCC giải thích macro này chứa đường dẫn file được compile](https://gcc.gnu.org/onlinedocs/cpp/Standard-Predefined-Macros.html). Đường dẫn build là một yếu tố gây binary khác byte; chưa có đủ metadata của phiên Kaggle để loại trừ mọi khác biệt compiler/flags. Bản sửa giữ lại đường dẫn build golden, in cả encoder/decoder SHA trước assertions và cung cấp cell phục hồi cho phiên đang chạy. Không đổi expected hash hay xác nhận binary mới tương đương baseline khi chưa kiểm chứng. Kết quả native preflight sau rebuild vẫn cần chạy trên Kaggle.

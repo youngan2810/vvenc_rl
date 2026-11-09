@@ -43,7 +43,9 @@ import torch
 assert torch.cuda.is_available() and torch.cuda.device_count()==2, 'Chọn GPU T4 x2 và restart Session'
 assert all('T4' in torch.cuda.get_device_name(i) for i in range(2))
 WORK=Path('/kaggle/working'); INPUT=Path('/kaggle/input')
-REPO=WORK/'vvenc_rl_v4'; CODEC=WORK/'vvenc_canonical_v4'
+# The golden encoder was built at this absolute path. VVenC CHECK/THROW
+# strings contain __FILE__, so changing the source directory can change SHA.
+REPO=WORK/'vvenc_rl_v4'; CODEC=WORK/'vvenc_rl_source'
 VVDEC=WORK/'vvdec_v3_2_0'; RUN=WORK/'vvc_agent_v4_run'
 LOGS=WORK/'v4_setup_logs';LOGS.mkdir(exist_ok=True)
 CANONICAL='e0b586c46f61e2ebbf131e4eb83f98817ff6e374'
@@ -139,6 +141,8 @@ if not (VVDEC/'.git').exists():
 run(['cmake','-S',VVDEC,'-B',VVDEC/'build','-DCMAKE_BUILD_TYPE=Release'])
 run(['cmake','--build',VVDEC/'build','--config','Release','-j','2'])
 from agent_v4.train import ENCODER_SHA,DECODER_SHA
+print('ENCODER_SHA256',sha(ENC),'EXPECTED',ENCODER_SHA)
+print('DECODER_SHA256',sha(DEC),'EXPECTED',DECODER_SHA)
 assert sha(ENC)==ENCODER_SHA,(sha(ENC),ENCODER_SHA)
 assert sha(DEC)==DECODER_SHA,(sha(DEC),DECODER_SHA)
 AUDITOR=DEC.with_name(DEC.name+'_poc_audit')
