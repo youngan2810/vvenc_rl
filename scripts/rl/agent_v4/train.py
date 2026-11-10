@@ -75,24 +75,29 @@ def validate_pending(a, progress, experiment, deadline):
     rates = [50,80,120,160,200] if kind == "full" else [50,120]
     out = a.output/pending["output"]
     out.mkdir(parents=True, exist_ok=True)
+    diagnostic_seeds = experiment.get('validation_diagnostic_seeds',[]) if kind == 'quick' else []
     cfg = {"checkpoint_sha256":pending["sha256"], "experiment":experiment,
-           "kind":kind, "videos":nvideos, "rates":rates, "frames":a.validation_frames}
+           "kind":kind, "videos":nvideos, "rates":rates, "frames":a.validation_frames,
+           "deployment_rule":"argmax","diagnostic_seeds":diagnostic_seeds,'collector_workers':a.workers}
     state_file = out/"progress.json"
     state = json.loads(state_file.read_text()) if state_file.exists() else {"config":cfg, "completed":[]}
     if state["config"] != cfg:
         raise ValueError("Pending Validation configuration differs")
-    done = {(s["index"],s["rate"]) for s in state["completed"]}
-    if len(done) != len(state["completed"]) or not done <= {(i,r) for i in range(nvideos) for r in rates}:
+    wanted = [(i,r,False,a.seed) for i in range(nvideos) for r in rates]
+    wanted += [(i,r,True,seed) for seed in diagnostic_seeds for i in range(nvideos) for r in rates]
+    done = {(s["index"],s["rate"],not s['deterministic'],s['seed']) for s in state["completed"]}
+    if len(done) != len(state["completed"]) or not done <= set(wanted):
         raise ValueError("Corrupt Validation progress")
-    remaining = [(i, r) for i in range(nvideos) for r in rates if (i,r) not in done]
+    remaining = [item for item in wanted if item not in done]
     for first in range(0, len(remaining), a.workers):
         if time.monotonic()+a.worker_timeout+600 >= deadline:
             commit_progress(a.output, progress)
             return False
         jobs = [{"split":"val", "index":i, "rate":r, "frames":a.validation_frames,
-                 "start":0, "seed":a.seed, "zero_gate":first == 0 and offset == 0,
-                 "output":new_attempt(out/f"val{i:02d}_r{r}")}
-                for offset,(i,r) in enumerate(remaining[first:first+a.workers])]
+                 "start":0, "seed":seed, "zero_gate":not sampled and pending['episodes'] == 0,
+                 "stochastic_validation":sampled,
+                 "output":new_attempt(out/(f"sample{seed}_val{i:02d}_r{r}" if sampled else f"val{i:02d}_r{r}"))}
+                for i,r,sampled,seed in remaining[first:first+a.workers]]
         run_jobs(jobs, a.repo, a.decoder, ckpt, a.input_root, a.worker_timeout)
         for job in jobs:
             summary = read_summary(job, pending["sha256"], experiment)
@@ -101,14 +106,28 @@ def validate_pending(a, progress, experiment, deadline):
             # Save each completed paired result before starting another batch.
             export_resume(a.output, progress)
             cleanup_raw(job["output"])
-    summaries = state["completed"]
+    summaries = [s for s in state["completed"] if s['deterministic']]
+    diagnostics = []
+    for seed in diagnostic_seeds:
+        ss = [s for s in state['completed'] if not s['deterministic'] and s['seed'] == seed]
+        diagnostics.append({'seed':seed,'pairs':len(ss),
+            'mean_score':sum(s['metrics']['score'] for s in ss)/len(ss),
+            'macro_delta_score':sum(s['delta_score'] for s in ss)/len(ss),
+            'macro_delta_f1':sum(s['delta_f1'] for s in ss)/len(ss)})
     metrics = {"kind":kind, "checkpoint":pending["checkpoint"], "sha256":pending["sha256"],
                "episodes":pending["episodes"], "pairs":len(summaries),
                "mean_score":sum(s["metrics"]["score"] for s in summaries)/len(summaries),
                "mean_selection_score":sum(s["metrics"]["selection_score"] for s in summaries)/len(summaries),
                "macro_delta_score":sum(s["delta_score"] for s in summaries)/len(summaries),
                "macro_delta_f1":sum(s["delta_f1"] for s in summaries)/len(summaries),
-               "macro_delta_kbps":sum(s["delta_kbps"] for s in summaries)/len(summaries)}
+               "macro_delta_kbps":sum(s["delta_kbps"] for s in summaries)/len(summaries),
+               'deployment_rule':'argmax','stochastic_diagnostics':diagnostics,
+               'diagnostic_pairs':sum(d['pairs'] for d in diagnostics)}
+    total_ctus = sum(sum(s['action_histogram'].values()) for s in summaries)
+    zeros = sum(s['action_histogram'].get('0',0) for s in summaries)
+    metrics['greedy_nonzero_ctu_fraction'] = 1-zeros/total_ctus
+    metrics['learning_signal'] = ('PAIRED_GREEDY_GAIN_CANDIDATE' if metrics['macro_delta_score'] > 0
+                                  and metrics['greedy_nonzero_ctu_fraction'] > 0 else 'NO_GREEDY_GAIN_ESTABLISHED')
     atomic_json(out/"summary.json", metrics)
     progress["validations"].append(metrics)
     # Only compare identical full 7x5 validation protocols. Quick probes do
@@ -158,7 +177,10 @@ def run(a):
     rc = RewardConfig(reward_mode, a.rate_mode, a.beta, a.rate_tolerance)
     pc = PPOConfig(gamma=1. if reward_mode == "clip-delta" else .99,
                    gae_lambda=1. if reward_mode == "clip-delta" else .95,
-                   auxiliary=a.auxiliary if a.auxiliary is not None else (.1 if mc.content else 0.))
+                   auxiliary=a.auxiliary if a.auxiliary is not None else (.1 if mc.content else 0.),
+                   credit_assignment=getattr(a,'credit_assignment',None) or ('counterfactual-final' if reward_mode == 'clip-delta' else 'joint-gae'),
+                   paired_baseline=reward_mode == 'clip-delta' and getattr(a,'credit_assignment',None) != 'joint-gae',
+                   auxiliary_mode=getattr(a,'auxiliary_mode','task-outcome'))
     experiment = {"model_version":MODEL_VERSION, "state_version":STATE_VERSION,
         "model_config":asdict(mc), "ppo_config":asdict(pc), "reward":asdict(rc), "update_version":UPDATE_VERSION,
         "preset":a.preset, "source_commit":source_commit,
@@ -169,6 +191,12 @@ def run(a):
         "encoder_threads":4, "decoder_threads":4, "val_every_updates":a.val_every_updates,
         "schedule_version":"interleaved-65-videos-v2", "split_ids_sha256":
         __import__("hashlib").sha256(json.dumps(splits, sort_keys=True).encode()).hexdigest()}
+    experiment.update(deployment_rule='argmax',validation_diagnostic_seeds=[20261117,20261143],
+                      final_score_target='paired-vanilla-delta' if pc.paired_baseline else (
+                          'absolute-final' if pc.credit_assignment != 'joint-gae' else 'discounted-tail'),
+                      task_label_contract='global-match-area-conserved-tp-fp-fn-v1',
+                      policy_surrogate='joint-clipped' if pc.credit_assignment == 'joint-gae' else 'sum-head-clipped',
+                      auxiliary_gradient_contract='conflict-projection-global-l2-budget-v1')
     plan = create_schedule(a.seed, a.epochs)
     if a.resume_archive:
         restore(a.resume_archive, a.output)
@@ -222,6 +250,7 @@ def run(a):
                 offset = choose_window(a.seed, item["epoch"], idx, a.frames, capacity[idx])
                 jobs.append({"split":"train", "index":idx, "rate":item["rate"],
                     "frames":a.frames, "start":offset, "seed":a.seed+100000+step,
+                    "paired":pc.paired_baseline,
                     "output":new_attempt(a.output/"episodes"/f"episode_{step+1:06d}")})
             run_jobs(jobs, a.repo, a.decoder, checkpoint, a.input_root, a.worker_timeout)
             if sha256_file(checkpoint) != ckpt_sha:
@@ -254,12 +283,18 @@ def run(a):
             rewards = torch.tensor([r["reward"] for r in rows])
             dones = torch.tensor([r["done"] for r in rows], dtype=torch.bool)
             targets = torch.tensor([r["teacher_occupancy"] for r in rows])
-            metrics = trainer.update(state, actions, old_lp, old_value, rewards, dones, targets)
+            outcomes = torch.tensor([r['task_outcomes'] for r in rows])
+            baseline_scores = (torch.cat([torch.full((len(rr),),ss['vanilla']['score'])
+                for (_,rr),ss in zip(batches,summaries)]) if pc.paired_baseline else None)
+            metrics = trainer.update(state, actions, old_lp, old_value, rewards, dones, targets,
+                                     outcomes,baseline_scores)
             metrics["feature_audit"] = {
                 "local_channel_mean":state["local"].mean((0,2,3)).tolist(),
                 "local_channel_std":state["local"].std((0,2,3),unbiased=False).tolist(),
                 "global_std":state["global"].std(0,unbiased=False).tolist(),
-                "history_valid_fraction":float(state["history"][:,:,-1].mean())}
+                "history_valid_fraction":float(state["history"][:,:,-1].mean()),
+                'source_image_mean':float(state['image'].float().mean()),
+                'source_image_std':float(state['image'].float().std(unbiased=False))}
             iteration = len(progress["updates"])+1
             updated = new_attempt(a.output/"checkpoints"/f"iter_{iteration:06d}.pt")
             save(updated, model, trainer, experiment, iteration)
@@ -310,6 +345,8 @@ def main():
     p.add_argument("--rate-tolerance", type=float, default=0.)
     p.add_argument("--beta", type=float, default=.1)
     p.add_argument("--auxiliary", type=float)
+    p.add_argument('--auxiliary-mode',choices=('task-outcome','presence'),default='task-outcome')
+    p.add_argument('--credit-assignment',choices=('counterfactual-final','shared-final','joint-gae'))
     p.add_argument("--frames", type=int, default=256)
     p.add_argument("--validation-frames", type=int, default=256)
     p.add_argument("--epochs", type=int, default=3)

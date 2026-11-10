@@ -1,7 +1,7 @@
 """Version-isolated QP agent. No imports or checkpoint migration into v3."""
 
-MODEL_VERSION = "ctu-categorical-content-history-v4.1"
+MODEL_VERSION = "ctu-categorical-counterfactual-outcome-v4.2"
 STATE_VERSION = "causal-ctu-source-history/1"
-SCHEMA = "vvenc-agent-v4/1"
-UPDATE_VERSION = "categorical-clip-aux-fullbatch-kl-v2"
+SCHEMA = "vvenc-agent-v4/2"
+UPDATE_VERSION = "final-score-masked-ctu-ppo-outcome-aux-v3"
 

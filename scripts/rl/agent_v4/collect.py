@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 
 from agent_v4.checkpoint import load
-from agent_v4.codec import encode
+from agent_v4.codec import encode, require_zero_identity
 from agent_v4.reward import RewardConfig, join, native_decision_rows
 from agent_v4.runtime import verify_source
 from au_rate_audit import read_au_bits
@@ -32,7 +32,8 @@ def decode_detect(decoder, detector, stream, out, frames, vid, threads):
 
 
 def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
-            start, rate, seed, deterministic=False, paired=False, zero_gate=False):
+            start, rate, seed, deterministic=False, paired=False, zero_gate=False,
+            stochastic_validation=False):
     ckpt, model, _ = load(checkpoint)
     exp = ckpt["experiment"]
     verify_source(repo,exp)
@@ -44,10 +45,12 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
         raise ValueError("Collector split IDs differ from experiment")
     if split not in ("train", "val") or not 0 <= index < len(splits[split]):
         raise ValueError("Collector accepts locked Train/Val only; never Test")
-    if split == "val" and (not deterministic or not paired or start != 0):
-        raise ValueError("Validation must be frozen, paired, starting at frame0")
-    if split == "train" and (deterministic or paired):
+    if split == "val" and (deterministic == stochastic_validation or not paired or start != 0):
+        raise ValueError("Validation requires exactly one declared greedy/sampled rule, paired, frame0")
+    if split == "train" and (deterministic or stochastic_validation):
         raise ValueError("Training requires stochastic fresh on-policy rollouts")
+    if split == 'train' and exp['ppo_config'].get('paired_baseline') and not paired:
+        raise ValueError("This experiment requires paired vanilla for every Train clip")
     if zero_gate and not paired:
         raise ValueError("Zero-action identity gate requires a paired Validation episode")
     encoder = repo/"bin/release-static/vvencapp"
@@ -70,7 +73,7 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
                                   output/"source_ffmpeg.log", start_frame=start)
     source_sha = sha256_file(source)
     stream, rows, aus = encode(repo, encoder, source, output/"online", frames,
-        checkpoint, rate, seed, deterministic, exp["encoder_threads"])
+        checkpoint, rate, seed, deterministic, exp["encoder_threads"],evaluation=split == 'val')
     detector, detector_provenance = load_frozen_yolov5(repo, lock)
     source_det = output/"source_detections.jsonl"
     detect_all(detector, source, frames, vid, source_det)
@@ -104,6 +107,9 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
                        delta_f1=metrics["f1"]-base_metrics["f1"],
                        delta_kbps=metrics["actual_kbps"]-base_metrics["actual_kbps"],
                        delta_score=metrics["selection_score"]-base_metrics["selection_score"])
+        # A zero-map result must reproduce the baseline on EVERY pair, not
+        # only the first zero-gate pair. Fail before publishing a success.
+        summary['zero_action_byte_identity'] = require_zero_identity(stream,base,rows,metrics,base_metrics,output)
         if zero_gate:
             zero, _, _ = encode(repo, encoder, source, output/"zero_gate", frames,
                 checkpoint, rate, seed, True, exp["encoder_threads"], zero=True)

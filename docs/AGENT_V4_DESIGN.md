@@ -1,5 +1,11 @@
 # Agent v4: QP theo nội dung và lịch sử mã hóa
 
+**Lịch sử thiết kế v4.1.** Bản đang dùng là v4.2, có model/update/schema mới,
+critic phản thực, paired final-score credit và task-outcome auxiliary. Xem
+[learning repair v4.2](AGENT_V42_LEARNING_REPAIR.md) trước khi đọc phần lịch sử
+dưới đây. Không dùng mô tả presence-only hoặc MC tail target bên dưới làm hợp
+đồng của trainer mới; checkpoint pilot v4.1 không được migrate.
+
 Trạng thái: source triển khai riêng trên `agent-v4-dev`, bắt đầu run mới. Chưa có bằng chứng v4 cải thiện detection–bitrate trên Kaggle. Phần dưới README cũ mô tả các run v2/v3, không phải kết quả của v4.
 
 ## 1. Vấn đề cần giải quyết

@@ -217,7 +217,7 @@ class PolicyContracts(unittest.TestCase):
         model.train()
         metrics = trainer.update(state,torch.cat(actions),torch.cat(lps),torch.cat(values),
             torch.tensor([.2,-.1,.4,-.3]),torch.tensor([False,True,False,True]),
-            torch.tensor([[.1,0]*6,[0,.2]*6]*2))
+            torch.tensor([[.1,0]*6,[0,.2]*6]*2),task_outcomes=torch.rand(4,12,3))
         self.assertLess(max(metrics["collector_parity"]),2e-4)
         self.assertLessEqual(metrics["exact_final_kl"],trainer.config.target_kl)
         self.assertFalse(torch.equal(actor_before,model.actor.image[0].weight))
@@ -247,7 +247,7 @@ class PolicyContracts(unittest.TestCase):
         with torch.no_grad():
             a,lp,v,_ = model.sample(s)
         metrics = trainer.update(s,a,lp,v,torch.linspace(-1,1,8),
-            torch.tensor([False]*7+[True]),torch.ones(8,12))
+            torch.tensor([False]*7+[True]),torch.ones(8,12),task_outcomes=torch.rand(8,12,3))
         self.assertGreater(metrics["proposed_final_kl"],trainer.config.target_kl)
         self.assertLessEqual(metrics["exact_final_kl"],trainer.config.target_kl)
         self.assertLess(metrics["accepted_actor_scale"],1)
@@ -318,7 +318,7 @@ class PolicyContracts(unittest.TestCase):
         rewards = torch.arange(8).float()/10
         dones = torch.zeros(8,dtype=torch.bool)
         dones[3] = dones[-1] = True
-        metrics = trainer.update(s,act,lp,value,rewards,dones,torch.rand(8,12))
+        metrics = trainer.update(s,act,lp,value,rewards,dones,torch.rand(8,12),task_outcomes=torch.rand(8,12,3))
         self.assertGreater(metrics["actor_steps"],0)
         self.assertFalse(torch.equal(before_actor,model.action_head.weight))
         self.assertFalse(torch.equal(before_critic,model.value_head[-1].weight))
@@ -485,21 +485,24 @@ class CoordinatorContracts(unittest.TestCase):
                     s = {k:v[None] for k,v in state.items()}
                     s["image"] = torch.zeros(1,1,160,240,dtype=torch.uint8)
                     with torch.no_grad():
-                        action,lp,value,_ = model.sample(s,job["split"] == "val")
+                        action,lp,value,_ = model.sample(s,job["split"] == "val" and not job.get('stochastic_validation'))
                     row = {"poc":poc, **{k:v.tolist() for k,v in state.items()},
                         "action":action[0].tolist(), "log_prob":float(lp[0]), "value":float(value[0]),
                         "reward":float(action.float().mean())*.01, "done":i == frames-1,
-                        "trainable":job["split"] == "train", "teacher_occupancy":[.1 if i%2 else 0.]*12}
+                        "trainable":job["split"] == "train", "teacher_occupancy":[.1 if i%2 else 0.]*12,
+                        'task_outcomes':[[.1,.2,.3]]*12}
                     rows.append(row)
                     builder.commit_action(row["action"])
                 (out/"rollout.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
-                summary = {"split":job["split"],"index":job["index"],"video_id":f'train{job["index"]}',
+                score = .95 if job.get('stochastic_validation') else .5
+                summary = {"split":job["split"],"index":job["index"],"video_id":f'{job["split"]}{job["index"]}',
                     "frames":frames,"rate":job["rate"],"start_frame":job["start"],"seed":job["seed"],
-                    "deterministic":job["split"] == "val", "policy_sha256":sha256_file(checkpoint),
+                    "deterministic":job["split"] == "val" and not job.get('stochastic_validation',False), "policy_sha256":sha256_file(checkpoint),
                     "experiment":ckpt["experiment"],"source_sha256":sha256_file(source),
                     "rollout_sha256":sha256_file(out/"rollout.jsonl"),
-                    "metrics":{"score":.5,"selection_score":.5,"f1":.5,"actual_kbps":job["rate"]},
-                    "action_histogram":{"0":frames*12},"delta_score":0.,"delta_f1":0.,"delta_kbps":0.}
+                    "metrics":{"score":score,"selection_score":score,"f1":.5,"actual_kbps":job["rate"]},
+                    "action_histogram":{"0":frames*12},"delta_score":score-.5,"delta_f1":0.,"delta_kbps":0.,
+                    'vanilla':{'score':.5}}
                 (out/"summary.json").write_text(json.dumps(summary))
             calls.append((len(jobs),str(checkpoint),[j["split"] for j in jobs]))
 
@@ -535,6 +538,10 @@ class CoordinatorContracts(unittest.TestCase):
             self.assertEqual(first["updates"][0]["transitions"],64)
             self.assertTrue(any(n == 2 and split == ["train","train"] for n,_,split in calls))
             self.assertNotIn("best_checkpoint",first)  # quick probes cannot select best
+            self.assertEqual(first['validations'][0]['mean_score'],.5)
+            self.assertEqual(first['validations'][0]['stochastic_diagnostics'][0]['mean_score'],.95)
+            self.assertEqual(first['validations'][0]['pairs'],4)
+            self.assertEqual(first['validations'][0]['diagnostic_pairs'],8)
             a.resume_archive = a.output/"VVC_AGENT_V4_RESUME.zip"
             a.output = root/"restored"
             train.run(a)

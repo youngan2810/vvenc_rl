@@ -111,9 +111,11 @@ def run_jobs(jobs, repo, decoder, checkpoint, input_root, timeout):
                    "--frames", str(job["frames"]), "--start", str(job["start"]),
                    "--rate", str(job["rate"]), "--seed", str(job["seed"])]
             if job["split"] == "val":
-                cmd.extend(["--paired", "--deterministic"])
+                cmd.extend(["--paired", "--stochastic-validation" if job.get('stochastic_validation') else "--deterministic"])
                 if job.get("zero_gate"):
                     cmd.append("--zero-gate")
+            elif job.get('paired'):
+                cmd.append('--paired')
             log = job["output"].with_suffix(".log")
             log.parent.mkdir(parents=True, exist_ok=True)
             handle = log.open("w", encoding="utf-8")
@@ -157,7 +159,7 @@ def read_summary(job, checkpoint_sha, experiment):
     expected = {"split":job["split"], "index":job["index"], "frames":job["frames"],
                 "rate":job["rate"], "start_frame":job["start"], "seed":job["seed"],
                 "policy_sha256":checkpoint_sha, "experiment":experiment,
-                "deterministic":job["split"] == "val"}
+                "deterministic":job["split"] == "val" and not job.get('stochastic_validation',False)}
     if any(summary.get(k) != v for k,v in expected.items()):
         raise ValueError("Collector identity differs from frozen job")
     if sha256_file(out/"rollout.jsonl") != summary["rollout_sha256"]:

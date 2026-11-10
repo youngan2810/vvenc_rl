@@ -21,6 +21,7 @@ def main():
     p.add_argument("--idle-timeout", type=float, default=600)
     p.add_argument("--deterministic", action="store_true")
     p.add_argument("--zero-action", action="store_true", help="Codec identity gate only, never trainable")
+    p.add_argument("--evaluation",action="store_true",help="Frozen sampled Validation, never trainable")
     a = p.parse_args()
     if a.state_file.exists() or a.trajectory_file.exists() or a.ready_file.exists():
         p.error("Fresh per-episode paths required")
@@ -60,14 +61,14 @@ def main():
                           torch.zeros(1, 1, 160, 240, dtype=torch.uint8))
             with torch.no_grad():
                 action, lp, value, probs = model.sample(s, a.deterministic,
-                                                       actor_only=a.deterministic or a.zero_action)
+                                                       actor_only=a.deterministic or a.zero_action or a.evaluation)
             actions = [0]*12 if a.zero_action else action[0].tolist()
             record = {"schema": STATE_VERSION, "poc": poc,
                       **{k:v.tolist() for k,v in state.items()},
                       "action": actions, "log_prob": float(lp[0]),
-                      "value": None if a.deterministic or a.zero_action else float(value[0]),
+                      "value": None if a.deterministic or a.zero_action or a.evaluation else float(value[0]),
                       "probabilities": probs[0].tolist(),
-                      "trainable": not a.zero_action and not a.deterministic}
+                      "trainable": not a.zero_action and not a.deterministic and not a.evaluation}
             # Persist state before releasing the encoder to the next picture.
             out.write(json.dumps(record, allow_nan=False, separators=(",", ":"))+"\n")
             out.flush()

@@ -42,6 +42,8 @@ def load(path: Path, experiment=None, train=False):
     reward = RewardConfig(**ckpt["experiment"]["reward"])
     if reward.mode == "clip-delta" and (config.gamma != 1 or config.gae_lambda != 1):
         raise ValueError("clip-delta default requires undiscounted Monte Carlo advantages")
+    if reward.mode != 'clip-delta' and config.credit_assignment != 'joint-gae':
+        raise ValueError("Final-score credit requires clip-delta rewards")
     model = Agent(ModelConfig(**ckpt["model_config"]))
     model.load_state_dict(ckpt["model_state"], strict=True)
     trainer = None

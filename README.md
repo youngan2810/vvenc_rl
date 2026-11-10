@@ -1,6 +1,21 @@
 # VVenC-RL: PPO-QP for Object Detection
 
-## Agent v4 development (2026-11-09)
+## Agent v4.2 learning repair (2026-11-10)
+
+The current `agent-v4-dev` requires a **new v4.2 run**, not a migration of the
+10-episode v4.1 pilot. It adds masked CTU counterfactual baselines, observed
+final-clip score credit, paired vanilla Train outcomes, action-conditioned
+local TP/FP/FN auxiliary supervision and bounded auxiliary gradients.
+Greedy Validation stays primary; two fixed-seed sampled probes expose the
+sampling/argmax gap without selecting a lucky seed. All-zero stream drift
+now fails on every paired result. Native codec source/binary is unchanged.
+
+Read the [v4.2 learning contract and limitations](docs/AGENT_V42_LEARNING_REPAIR.md)
+and [run instructions](docs/AGENT_V4_RUN.md). The Kaggle notebook includes a
+Train-only native reproducibility/headroom diagnostic before the new pilot.
+These repairs are not a claim of measured VVenC quality improvement.
+
+## Agent v4.1 development history (2026-11-09)
 
 Branch `agent-v4-dev` adds an isolated QP agent: categorical CTU actions,
 causal encoder/history features, an optional source-luma CNN, train-only

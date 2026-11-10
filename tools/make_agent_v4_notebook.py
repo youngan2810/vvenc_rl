@@ -14,14 +14,16 @@ def cell(kind, text):
 
 
 cells = [cell("markdown", """
-# VVenC Agent v4 — new pilot / strict resume
+# VVenC Agent v4.2 — final-score / CTU credit / task outcome
 
 Đây là run **v4 mới**, không resume EP650. T4×2, Internet ON.
 Input: locked65/7/100 manifest + Baseline protocol lock + BDD100K Train00 MOV.
 Lần đầu: `MODE='new'`,10 episode. Chỉ chạy dài sau khi xem paired Val.
 Resume v4: đổi MODE và đặt RESUME_INPUT là đường dẫn ZIP hoặc thư mục
 đã giải nén của **VVC_AGENT_V4_RESUME**; cấu hình/commit được kế thừa tự động.
-Không dùng EXPORT_5 hay bundle Test EP650.
+Không dùng EXPORT_5, bundle Test EP650 hoặc checkpoint pilot v4.1. V4.2 là
+experiment mới: paired Train, critic phản thực, auxiliary task-outcome.
+Quick Val =4 greedy pairs +8 sampled diagnostic pairs (2 seed cố định).
 """), cell("code", """
 MODE = 'new'  # 'new' hoặc 'resume'
 MAX_ADDITIONAL_EPISODES = 10
@@ -29,6 +31,8 @@ RESUME_INPUT = ''  # Ví dụ /kaggle/input/datasets/owner/v4-session/VVC_AGENT_
 SOURCE_COMMIT = ''  # New: trống=resolve branch rồi ghi SHA; resume: lấy từ archive
 SESSION_HOURS = 11.75  # Tổng budget từ đầu notebook, gồm setup; driver dành thời gian export
 NEW_PRESET = 'content-task'
+NEW_AUXILIARY_MODE = 'task-outcome'  # 'presence' chỉ cho ablation run mới
+RUN_HEADROOM_DIAGNOSTIC = True  # Train-only, no PPO; chỉ chạy khi MODE=new
 NEW_EPOCHS, NEW_SEED = 3, 20261109
 assert MODE in ('new','resume') and MAX_ADDITIONAL_EPISODES >= 0
 assert MODE == 'resume' or not RESUME_INPUT, 'Có resume input: chọn MODE=resume'
@@ -46,8 +50,9 @@ WORK=Path('/kaggle/working'); INPUT=Path('/kaggle/input')
 # The golden encoder was built at this absolute path. VVenC CHECK/THROW
 # strings contain __FILE__, so changing the source directory can change SHA.
 REPO=WORK/'vvenc_rl_v4'; CODEC=WORK/'vvenc_rl_source'
-VVDEC=WORK/'vvdec_v3_2_0'; RUN=WORK/'vvc_agent_v4_run'
-LOGS=WORK/'v4_setup_logs';LOGS.mkdir(exist_ok=True)
+VVDEC=WORK/'vvdec_v3_2_0'; RUN=WORK/'vvc_agent_v42_run'
+LOGS=WORK/'v42_setup_logs';LOGS.mkdir(exist_ok=True)
+HEADROOM=None
 CANONICAL='e0b586c46f61e2ebbf131e4eb83f98817ff6e374'
 ENC=REPO/'bin/release-static/vvencapp'; DEC=VVDEC/'bin/release-static/vvdecapp'
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -57,8 +62,15 @@ def run(cmd,cwd=None,check=True):
     with path.open('w') as log:
         p=subprocess.Popen(list(map(str,cmd)),cwd=cwd,stdout=log,stderr=subprocess.STDOUT)
         last=time.monotonic()
+        offset=0;pending=''
         while p.poll() is None:
             time.sleep(2)
+            with path.open(errors='replace') as reader:
+                reader.seek(offset);pending+=reader.read();offset=reader.tell()
+            lines=pending.split('\n');pending=lines.pop()
+            for line in lines:
+                if line.startswith(('V4_','AGENT_V4','Traceback','ERROR','ValueError','RuntimeError')):
+                    print(line,flush=True)
             if time.monotonic()-last>40:
                 print('RUNNING',path.name,flush=True);last=time.monotonic()
         rc=p.returncode
@@ -72,7 +84,7 @@ if MODE=='resume':
     RESUME_ARCHIVE=WORK/'v4_verified_input.zip'
     if src.is_dir():
         manifest=json.loads((src/'bundle_manifest.json').read_text())
-        assert manifest['schema']=='vvenc-agent-v4/1'
+        assert manifest['schema']=='vvenc-agent-v4/2','V4.2 requires a NEW run; v4.1 pilot cannot migrate'
         with zipfile.ZipFile(RESUME_ARCHIVE,'w',zipfile.ZIP_DEFLATED) as z:
             for name,digest in manifest['files'].items():
                 rel=PurePosixPath(name)
@@ -86,13 +98,13 @@ if MODE=='resume':
         shutil.copy2(src,RESUME_ARCHIVE)
     with zipfile.ZipFile(RESUME_ARCHIVE) as z:
         manifest=json.loads(z.read('bundle_manifest.json'))
-        assert manifest['schema']=='vvenc-agent-v4/1'
+        assert manifest['schema']=='vvenc-agent-v4/2','Use the pinned old launcher for v4.1; do not migrate weights'
         assert len(z.namelist())==len(set(z.namelist()))
         assert set(z.namelist())==set(manifest['files'])|{'bundle_manifest.json'}
         for name,digest in manifest['files'].items():
             assert hashlib.sha256(z.read(name)).hexdigest()==digest,name
         prior=json.loads(z.read('progress.json'))
-    assert prior['purpose']=='training' and prior['schema']=='vvenc-agent-v4/1'
+    assert prior['purpose']=='training' and prior['schema']=='vvenc-agent-v4/2'
     EXP=prior['experiment'];SOURCE_COMMIT=EXP['source_commit']
     print('RESUME_V4_EPISODES_BEFORE',len(prior['completed']))
 else:
@@ -153,6 +165,13 @@ from training_session import new_attempt
 PREFLIGHT=new_attempt(WORK/'v4_native_preflight')
 run([sys.executable,REPO/'scripts/rl/agent_v4_preflight.py','--repo',REPO,'--encoder',ENC,
      '--decoder',DEC,'--output',PREFLIGHT])
+
+if MODE=='new' and RUN_HEADROOM_DIAGNOSTIC:
+    HEADROOM=new_attempt(WORK/'v42_train_headroom')
+    run([sys.executable,'-u',REPO/'scripts/rl/agent_v4_headroom.py','--repo',REPO,'--decoder',DEC,
+         '--output',HEADROOM,'--index',0,'--rates',50,120,'--frames',256,'--repeats',2,
+         '--max-hours',min(1.5,(SESSION_HOURS*3600-(time.monotonic()-SESSION_START))/3600)])
+    print('HEADROOM',json.loads((HEADROOM/'headroom.json').read_text()),flush=True)
 environment={'source_commit':SOURCE_COMMIT,'python':sys.version,'torch':torch.__version__,
  'platform':platform.platform(),'encoder_sha256':sha(ENC),'decoder_sha256':sha(DEC),
  'auditor_sha256':sha(AUDITOR),'baseline_lock_sha256':locked['lock_sha256'],
@@ -173,7 +192,9 @@ cfg=EXP or {'preset':NEW_PRESET,'epochs':NEW_EPOCHS,'seed':NEW_SEED,'frames':256
  'validation_frames':256,'workers':2,'val_every_updates':25,
  'reward':{'mode':'legacy-frame' if NEW_PRESET=='categorical-control' else 'clip-delta',
            'rate_mode':'symmetric','beta':.1,'tolerance':0},
- 'ppo_config':{'auxiliary':.1 if NEW_PRESET=='content-task' else 0.}}
+ 'ppo_config':{'auxiliary':.1 if NEW_PRESET=='content-task' else 0.,
+               'auxiliary_mode':NEW_AUXILIARY_MODE,
+               'credit_assignment':'joint-gae' if NEW_PRESET=='categorical-control' else 'counterfactual-final'}}
 cmd=[sys.executable,'-u',REPO/'scripts/rl/agent_v4_train.py','--repo',REPO,'--decoder',DEC,
  '--output',RUN,'--max-episodes',MAX_ADDITIONAL_EPISODES,'--max-hours',remaining/3600]
 for option in ('preset','epochs','seed','frames','validation_frames','workers','val_every_updates'):
@@ -181,6 +202,8 @@ for option in ('preset','epochs','seed','frames','validation_frames','workers','
 for option,key in (('reward','mode'),('rate-mode','rate_mode'),('beta','beta'),('rate-tolerance','tolerance')):
     cmd+=['--'+option,cfg['reward'][key]]
 cmd+=['--auxiliary',cfg['ppo_config']['auxiliary']]
+cmd+=['--auxiliary-mode',cfg['ppo_config']['auxiliary_mode'],
+      '--credit-assignment',cfg['ppo_config']['credit_assignment']]
 if RESUME_ARCHIVE is not None and not (RUN/'progress.json').exists():
     cmd+=['--resume-archive',RESUME_ARCHIVE]
 TRAIN_RC=run(cmd,cwd=REPO,check=False)
@@ -203,6 +226,10 @@ with zipfile.ZipFile(session,'w',zipfile.ZIP_STORED) as z:
         if path.is_file():z.write(path,'setup_logs/'+path.relative_to(LOGS).as_posix())
     for path in PREFLIGHT.rglob('*'):
         if path.is_file() and path.suffix!='.yuv':z.write(path,'native_preflight/'+path.relative_to(PREFLIGHT).as_posix())
+    if HEADROOM is not None:
+        for path in HEADROOM.rglob('*'):
+            if path.is_file() and path.suffix not in ('.yuv','.pt','.zip'):
+                z.write(path,'train_headroom/'+path.relative_to(HEADROOM).as_posix())
     z.writestr('session_status.json',json.dumps({'training_return_code':TRAIN_RC,
       'completed':len(progress['completed']),'source_commit':SOURCE_COMMIT}))
 display(FileLink(str(session)))

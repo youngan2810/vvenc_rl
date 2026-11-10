@@ -7,7 +7,7 @@ import math
 import numpy as np
 
 from agent_v4.state import cell_bounds, StateBuilder
-from reward_metrics import DetectionCounts, match_one_to_one, calculate_frame_reward
+from reward_metrics import DetectionCounts, match_one_to_one, calculate_frame_reward, bbox_iou
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,40 @@ def occupancy(boxes):
     return targets
 
 
+def local_task_outcomes(source, decoded):
+    """Conserve global confidence-ordered matches across CTU boundaries.
+
+    TP/FN distribute one event by reference-box area; FP by prediction-box
+    area. Labels describe measured task outcomes, NOT causal QP sensitivity.
+    Never match each CTU separately (which double counts crossing boxes).
+    """
+    events = []
+    unmatched = set(range(len(source)))
+    for pred in sorted(decoded,key=lambda b:b.confidence,reverse=True):
+        viable = [(bbox_iou(pred,source[i]),i) for i in unmatched]
+        best = max(viable,key=lambda p:(p[0],-p[1])) if viable else None
+        if best and best[0] >= .5:
+            unmatched.remove(best[1])
+            events.append((0,source[best[1]]))
+        else:
+            events.append((1,pred))
+    events.extend((2,source[i]) for i in sorted(unmatched))
+    result = [[0.,0.,0.] for _ in range(12)]
+    for channel,b in events:
+        areas = [max(0.,min(x1,b.x2)-max(x0,b.x1))*max(0.,min(y1,b.y2)-max(y0,b.y1))
+                 for x0,y0,x1,y1 in cell_bounds()]
+        total = sum(areas)
+        if total <= 0:
+            raise ValueError("Task box lies outside the encoded image")
+        for row,area in zip(result,areas):
+            row[channel] += area/total
+    counts = match_one_to_one(source,decoded,.5)
+    for k,v in enumerate((counts.tp,counts.fp,counts.fn)):
+        if abs(sum(r[k] for r in result)-v) > 1e-8:
+            raise RuntimeError("Local task labels do not conserve global counts")
+    return result
+
+
 def join(rows, aus, source, decoded, target_bps, config: RewardConfig, video_id):
     n = len(rows)
     pocs = [r["poc"] for r in rows]
@@ -92,6 +126,7 @@ def join(rows, aus, source, decoded, target_bps, config: RewardConfig, video_id)
         previous = current
         out.append({**row, "video_id": video_id, "reward": reward, "done": i == n,
                     "teacher_occupancy": occupancy(source[poc]),
+                    "task_outcomes":local_task_outcomes(source[poc],decoded[poc]),
                     "au_bits": au[poc].au_bits, "au_output_step": au[poc].output_step,
                     "counts": asdict(c), "prefix_score": current})
     if config.mode == "clip-delta" and abs(sum(r["reward"] for r in out)-previous) > 1e-10:

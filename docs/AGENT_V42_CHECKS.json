@@ -1,0 +1,38 @@
+{
+  "schema": "vvenc-agent-v42-local-checks/1",
+  "date": "2026-11-10",
+  "base_commit": "025a6df99144cfb854f895a5ec0de9341226de08",
+  "model_version": "ctu-categorical-counterfactual-outcome-v4.2",
+  "checkpoint_schema": "vvenc-agent-v4/2",
+  "update_version": "final-score-masked-ctu-ppo-outcome-aux-v3",
+  "tests": {
+    "passed": 134,
+    "legacy": 92,
+    "v41_regressions": 29,
+    "new_v42": 13,
+    "elapsed_seconds": 80.557
+  },
+  "test_log_sha256": "25a52e22939929ac7305d5a4ffa3e4a02d6679cee5d317464ff84addbc409d92",
+  "notebook_sha256": "fb759963a99c3b279f952e04f394336641856c8460000bb0d8a23c715ba46d7b",
+  "notebook_validation": "schema/code-cell compilation PASS; not executed on Kaggle",
+  "legacy_python_files_unchanged": 47,
+  "native_sources_modified": false,
+  "model_parameters": 279375,
+  "actor_parameters_including_auxiliary": 82281,
+  "critic_parameters": 197094,
+  "python": "3.11.9",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "native_v42_codec_gpu_run_executed": false,
+  "kaggle_v42_training_executed": false,
+  "synthetic_learning_regression": {
+    "initial_greedy_correct_fraction": 0.0,
+    "final_greedy_correct_fraction": 1.0,
+    "updates": 50,
+    "scope": "Two-context known-reward bandit. Not a VVenC quality result."
+  },
+  "limitations": [
+    "Real native reproducibility/headroom gate pending Kaggle.",
+    "No measured v4.2 detection/bitrate gain or confirmed fix for native stream drift.",
+    "No automatic v4.1 checkpoint migration or deterministic distillation."
+  ]
+}
