@@ -1,0 +1,43 @@
+{
+  "schema": "vvenc-agent-v4-multiclip-checks/1",
+  "date": "2026-11-10",
+  "base_commit": "283a16ef47bfb7f175ad43b496a01d2e52313e8a",
+  "model_version": "ctu-categorical-counterfactual-outcome-v4.2",
+  "schema_checkpoint": "vvenc-agent-v4/2",
+  "update_version": "frozen-multiclip-ctu-ppo-outcome-v4",
+  "collection_version": "frozen-multiclip-waves-v1",
+  "tests": {
+    "passed": 163,
+    "previous": 148,
+    "new": 15,
+    "exit_code": 0,
+    "elapsed_seconds": 93.573
+  },
+  "test_log_sha256": "7a7c9c0a95ee56cb9ee271f17d2ce11492a49e172d7a701bce3846a5d013cbd3",
+  "notebook_sha256": "3f21112c796408da29cb54d19af7ee57800052c1835011841710c9fdc23c228f",
+  "notebook_validation": "All code cells compile; embedded helpers match source; real new10/resume40 command construction and guarded failure exports pass.",
+  "pilot_defaults": {
+    "mode": "new",
+    "additional_episodes": 10,
+    "workers": 2,
+    "rollouts_per_update": 4,
+    "ppo_minibatch": 64,
+    "actor_lr": 0.0001,
+    "val_every_episodes": 20,
+    "validation_spatial_controls": true,
+    "ppo_updates_if_complete": 3,
+    "train_frames_if_complete": 2560
+  },
+  "legacy_python_files_unchanged": 47,
+  "native_sources_changed": false,
+  "native_source_tree_expected": "85a09ba2c6a7701b964647022f357d99caf39dfc",
+  "kaggle_native_gpu_pilot_executed": false,
+  "quality_gain_claim": false,
+  "frozen_control_archive_sha256": "f2c14556af18e1ae84a43ece2ae76f16af04a1280c488cc11348ac3f2f2f8995",
+  "limitations": [
+    "Four clips/minibatch64 are an experimental choice, not a proven optimum.",
+    "Nonzero live/fixed preflight identity and new measured controls require Kaggle validation.",
+    "Frame-modal control is open-loop replay, not a separately trained frame policy or matched-actual-rate comparator.",
+    "Pilot10 is a smoke test, not sufficient to rank learning quality against the old pilot50."
+  ]
+}

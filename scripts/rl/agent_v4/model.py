@@ -13,6 +13,7 @@ from torch.nn import functional as F
 from agent_v4 import MODEL_VERSION
 from agent_v4.state import geometry, GLOBAL_DIM, LOCAL_DIM, HISTORY, HISTORY_DIM
 from agent_v4.learning import episode_scores, measured_episode_scores, counterfactual_advantages, merge_actor_gradients
+from agent_v4.diagnostics import spatial_credit_diagnostics,gradient_group_indices,gradient_rms
 from ppo_agent import quantized_action_probabilities, PPOActorCritic
 
 
@@ -299,6 +300,8 @@ class Trainer:
         else:
             adv, returns = advantages(rewards, old_values, dones, c.gamma, c.gae_lambda)
         advantage_std = float(adv.std(unbiased=False))
+        spatial_credit = (spatial_credit_diagnostics(adv,cf_baseline,probs,
+            q if c.credit_assignment=='counterfactual-final' else None) if final_credit else None)
         adv = (adv-adv.mean())/(adv.std(unbiased=False)+1e-8)
         actor_stopped, steps, actor_steps = False, 0, 0
         stats = {k:[] for k in ('policy_loss','value_loss','final_value_loss','counterfactual_value_loss',
@@ -306,6 +309,8 @@ class Trainer:
                 'primary_grad_norm','auxiliary_grad_norm','auxiliary_grad_cosine',
                 'auxiliary_grad_scale','auxiliary_grad_conflict')}
         actor_params = self.model.actor_parameters()
+        gradient_groups=gradient_group_indices(self.model,actor_params)
+        group_stats={}
         actor_before = [p.detach().clone() for p in actor_params]
         optimizer_before = copy.deepcopy(self.actor_optimizer.state_dict())
         # Keep old probabilities for exact factorized categorical KL. Their
@@ -357,6 +362,10 @@ class Trainer:
                     auxiliary = (torch.autograd.grad(c.auxiliary*aux_loss,actor_params,allow_unused=True)
                                  if c.auxiliary else [None]*len(actor_params))
                     merged,diagnostics = merge_actor_gradients(primary,auxiliary,actor_params,c.auxiliary_grad_ratio)
+                    for group,values in gradient_rms(gradient_groups,actor_params,
+                            primary=primary,auxiliary_raw=auxiliary,merged=merged).items():
+                        dest=group_stats.setdefault(group,{key:[] for key in values})
+                        for key,val in values.items():dest[key].append(val)
                     for p,g in zip(actor_params,merged):
                         p.grad = g
                     for key,val in diagnostics.items():
@@ -406,6 +415,8 @@ class Trainer:
             final_probs = final_log_probs.exp()
         return {**{k:sum(v)/max(1,len(v)) for k,v in stats.items()},
                 "credit_assignment":c.credit_assignment,"auxiliary_mode":c.auxiliary_mode,
+                'spatial_credit':spatial_credit,
+                'actor_gradient_rms':{group:{k:sum(v)/len(v) for k,v in values.items()} for group,values in group_stats.items()},
                 "paired_baseline":c.paired_baseline,
                 "counterfactual_baseline_std":float(cf_baseline.std(unbiased=False)) if final_credit else None,
                 'frozen_final_value_mse':float((returns-old_values).square().mean()),

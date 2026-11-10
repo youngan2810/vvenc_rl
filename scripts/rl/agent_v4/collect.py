@@ -1,11 +1,13 @@
 """One real codec/detector episode, for training or frozen paired Validation."""
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import time
 
 from agent_v4.checkpoint import load
-from agent_v4.codec import encode, require_zero_identity, vanilla_encode, require_runtime_profile
+from agent_v4.codec import encode, encode_fixed_map, require_zero_identity, vanilla_encode, require_runtime_profile
+from agent_v4.diagnostics import action_diagnostics,fixed_control_maps
 from agent_v4.reward import RewardConfig, join, native_decision_rows
 from agent_v4.runtime import verify_source
 from au_rate_audit import read_au_bits
@@ -30,9 +32,41 @@ def decode_detect(decoder, detector, stream, out, frames, vid, threads):
     return read_detections(det, vid, set(range(frames))), mapping
 
 
+def collect_spatial_controls(encoder,source,decoder,detector,output,frames,rate,vid,
+                            source_boxes,rows,online,online_metrics,baseline_metrics,config,threads):
+    """Measured interventions, excluded from PPO and checkpoint selection."""
+    controls={}
+    original={r['poc']:r['action'] for r in rows}
+    for name,maps in fixed_control_maps(rows,frames).items():
+        out=output/'controls'/name
+        stream,aus=encode_fixed_map(encoder,source,out,frames,rate,maps,threads)
+        boxes,mapping=decode_detect(decoder,detector,stream,out,frames,vid,threads)
+        decisions=native_decision_rows(out/'states.txt',frames)
+        for row in decisions:row['action']=maps[row['poc']]
+        _,metrics=join(decisions,aus,source_boxes,boxes,rate*1000,config,vid)
+        identical_map=all(maps[p]==original[p] for p in range(frames))
+        if identical_map and sha256_file(stream)!=sha256_file(online):
+            atomic_json(out/'replay_identity_failure.json',{'gate':'NONZERO_REPLAY_MISMATCH',
+                'online_sha256':sha256_file(online),'fixed_sha256':sha256_file(stream)})
+            raise ValueError('Identical action replay differs from live policy stream')
+        if sha256_file(stream)==sha256_file(online) and any(not math.isclose(
+                value,online_metrics[key],rel_tol=0,abs_tol=1e-12) for key,value in metrics.items()):
+            raise ValueError('Identical replay stream has different task metrics')
+        result={'kind':name,'trainable':False,'selection_eligible':False,
+            'open_loop_replay':name=='frame_uniform_replay','equal_actual_bitrate_claim':False,
+            'stream_sha256':sha256_file(stream),'alignment':mapping,'metrics':metrics,
+            'same_map_as_greedy':identical_map,
+            'delta_score_vs_vanilla':metrics['score']-baseline_metrics['score'],
+            'delta_f1_vs_vanilla':metrics['f1']-baseline_metrics['f1'],
+            'delta_kbps_vs_vanilla':metrics['actual_kbps']-baseline_metrics['actual_kbps'],
+            'greedy_minus_control_score':online_metrics['score']-metrics['score']}
+        atomic_json(out/'summary.json',result);controls[name]=result
+    return controls
+
+
 def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
             start, rate, seed, deterministic=False, paired=False, zero_gate=False,
-            stochastic_validation=False):
+            stochastic_validation=False,spatial_controls=False):
     ckpt, model, _ = load(checkpoint)
     exp = ckpt["experiment"]
     require_runtime_profile(exp)
@@ -53,6 +87,8 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
         raise ValueError("This experiment requires paired vanilla for every Train clip")
     if zero_gate and not paired:
         raise ValueError("Zero-action identity gate requires a paired Validation episode")
+    if spatial_controls and (split!='val' or not deterministic or not paired or stochastic_validation):
+        raise ValueError('Spatial controls require frozen paired greedy Validation')
     encoder = repo/"bin/release-static/vvencapp"
     if any(sha256_file(p) != exp[key] for p,key in
            ((encoder,"encoder_sha256"),(decoder,"decoder_sha256"))):
@@ -95,6 +131,7 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
         "detector": detector_provenance, "alignment": mapping,
         "metrics": metrics, "rollout_sha256": sha256_file(output/"rollout.jsonl"),
         "action_histogram": {str(i):actions.count(i) for i in range(-2, 3)}}
+    summary['action_diagnostics']=action_diagnostics(rows)
     if paired:
         base = vanilla_encode(encoder, source, output/"vanilla", frames, rate, exp["encoder_threads"])
         base_boxes, base_mapping = decode_detect(decoder, detector, base, output/"vanilla", frames,
@@ -115,7 +152,10 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
                 checkpoint, rate, seed, True, exp["encoder_threads"], zero=True)
             if sha256_file(zero) != sha256_file(base):
                 raise ValueError("Zero action bitstream != VVenC baseline")
-            summary["zero_action_byte_identity"] = True
+            summary["explicit_zero_gate_byte_identity"] = True
+        if spatial_controls:
+            summary['spatial_controls']=collect_spatial_controls(encoder,source,decoder,detector,
+                output,frames,rate,vid,source_boxes,rows,stream,metrics,base_metrics,reward_config,exp['encoder_threads'])
     if sha256_file(checkpoint) != checkpoint_sha or sha256_file(source) != source_sha:
         raise ValueError("Policy/source modified while collecting")
     summary["elapsed_seconds"] = time.monotonic()-began

@@ -1,4 +1,10 @@
-# Chạy Agent v4.2
+# Chạy Agent v4
+
+**Hướng dẫn hiện hành:** [multi-clip pilot10](AGENT_V4_MULTICLIP_RUN.md).
+Update contract mới gom4 clip/update bằng2 GPU, minibatch64, Validation theo
+episode và có đối chứng spatial. Phải tạo experiment mới, giữ EP50 cũ làm
+đối chứng. Phần bên dưới là lịch sử hướng dẫn v4.2 hai clip/update; không dùng
+lệnh/cap/update-count cũ cho notebook hiện tại.
 
 Runtime hiện tại là **FPP1 mới**:4 encoder threads, `MaxParallelFrames=1`,
 4 decoder threads. Xem [bằng chứng và giới hạn](AGENT_V42_FPP1_PROFILE.md).

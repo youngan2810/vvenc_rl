@@ -19,6 +19,7 @@ def main():
     p.add_argument("--paired", action="store_true")
     p.add_argument("--zero-gate", action="store_true")
     p.add_argument("--stochastic-validation",action="store_true")
+    p.add_argument('--spatial-controls',action='store_true')
     a = p.parse_args()
     if not 32 <= a.frames <= 512 or a.start < 0 or a.seed < 0:
         p.error("Invalid frame count/offset/seed")

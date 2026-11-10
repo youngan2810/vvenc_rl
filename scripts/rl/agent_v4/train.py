@@ -18,7 +18,7 @@ from agent_v4.codec import runtime_profile
 from agent_v4.model import Agent, ModelConfig, PPOConfig, Trainer
 from agent_v4.reward import RewardConfig
 from agent_v4.session import (export_resume, export_results, restore,
-                              run_jobs, read_summary, new_attempt)
+                              run_jobs, run_frozen_jobs, read_summary, new_attempt)
 from agent_v4.state import SourceFrames, stack_states
 from decoder_alignment import require_auditor
 from full_train import atomic_json, create_schedule, choose_window, video_frame_capacity
@@ -77,9 +77,12 @@ def validate_pending(a, progress, experiment, deadline):
     out = a.output/pending["output"]
     out.mkdir(parents=True, exist_ok=True)
     diagnostic_seeds = experiment.get('validation_diagnostic_seeds',[]) if kind == 'quick' else []
+    spatial_controls = (getattr(a,'spatial_controls',False) or (kind=='quick' and
+        pending['episodes']>0 and experiment.get('validation_spatial_controls',False)))
     cfg = {"checkpoint_sha256":pending["sha256"], "experiment":experiment,
            "kind":kind, "videos":nvideos, "rates":rates, "frames":a.validation_frames,
-           "deployment_rule":"argmax","diagnostic_seeds":diagnostic_seeds,'collector_workers':a.workers}
+           "deployment_rule":"argmax","diagnostic_seeds":diagnostic_seeds,'collector_workers':a.workers,
+           'spatial_controls':spatial_controls}
     state_file = out/"progress.json"
     state = json.loads(state_file.read_text()) if state_file.exists() else {"config":cfg, "completed":[]}
     if state["config"] != cfg:
@@ -97,6 +100,7 @@ def validate_pending(a, progress, experiment, deadline):
         jobs = [{"split":"val", "index":i, "rate":r, "frames":a.validation_frames,
                  "start":0, "seed":seed, "zero_gate":not sampled and pending['episodes'] == 0,
                  "stochastic_validation":sampled,
+                 'spatial_controls':spatial_controls and not sampled,
                  "output":new_attempt(out/(f"sample{seed}_val{i:02d}_r{r}" if sampled else f"val{i:02d}_r{r}"))}
                 for i,r,sampled,seed in remaining[first:first+a.workers]]
         run_jobs(jobs, a.repo, a.decoder, ckpt, a.input_root, a.worker_timeout)
@@ -129,6 +133,24 @@ def validate_pending(a, progress, experiment, deadline):
     metrics['greedy_nonzero_ctu_fraction'] = 1-zeros/total_ctus
     metrics['learning_signal'] = ('PAIRED_GREEDY_GAIN_CANDIDATE' if metrics['macro_delta_score'] > 0
                                   and metrics['greedy_nonzero_ctu_fraction'] > 0 else 'NO_GREEDY_GAIN_ESTABLISHED')
+    if all('action_diagnostics' in s for s in summaries):
+        metrics['greedy_mixed_delta_frame_fraction'] = sum(s['action_diagnostics']['mixed_delta_frame_fraction'] for s in summaries)/len(summaries)
+    if spatial_controls:
+        metrics['spatial_controls'] = {name:{
+            'pairs':len(summaries),'macro_delta_score_vs_vanilla':sum(s['spatial_controls'][name]['delta_score_vs_vanilla'] for s in summaries)/len(summaries),
+            'macro_delta_f1_vs_vanilla':sum(s['spatial_controls'][name]['delta_f1_vs_vanilla'] for s in summaries)/len(summaries),
+            'macro_delta_kbps_vs_vanilla':sum(s['spatial_controls'][name]['delta_kbps_vs_vanilla'] for s in summaries)/len(summaries),
+            'greedy_minus_control_score':sum(s['metrics']['score']-s['spatial_controls'][name]['metrics']['score'] for s in summaries)/len(summaries),
+            'selection_eligible':False} for name in ('uniform_minus1','frame_uniform_replay')}
+        metrics['spatial_learning_signal'] = ('MEASURED_FRAME_REPLAY_GAIN_CANDIDATE' if
+            metrics['spatial_controls']['frame_uniform_replay']['greedy_minus_control_score']>0
+            else 'NO_FRAME_REPLAY_GAIN_ESTABLISHED')
+    initial=next((v for v in progress['validations'] if v['kind']=='quick' and v['episodes']==0),None)
+    if kind=='quick' and initial is not None and diagnostics:
+        initial_by_seed={d['seed']:d for d in initial['stochastic_diagnostics']}
+        if set(initial_by_seed)=={d['seed'] for d in diagnostics}:
+            metrics['sampled_f1_change_from_initial'] = sum(d['macro_delta_f1']-initial_by_seed[d['seed']]['macro_delta_f1'] for d in diagnostics)/len(diagnostics)
+            metrics['sampled_score_change_from_initial'] = sum(d['macro_delta_score']-initial_by_seed[d['seed']]['macro_delta_score'] for d in diagnostics)/len(diagnostics)
     atomic_json(out/"summary.json", metrics)
     progress["validations"].append(metrics)
     # Only compare identical full 7x5 validation protocols. Quick probes do
@@ -151,14 +173,23 @@ def stage_validation(progress, kind):
         "output":f"validation_{n:06d}_{kind}"}
 
 
-def due_validation(progress, interval, session_end=False):
+def due_validation(progress, interval, session_end=False, every_episodes=0):
     n = len(progress['completed'])
+    periodic = n%every_episodes == 0 if every_episodes else len(progress['updates'])%interval == 0
     kind = ('quick' if n == 0 else 'full' if n%325 == 0 else
-            'quick' if len(progress['updates'])%interval == 0 or session_end else None)
+            'quick' if periodic or session_end else None)
     if (progress.get('pending_validation') or kind is None or
             any(v['episodes']==n and v['kind']==kind for v in progress['validations'])):
         return None
     return kind
+
+
+def next_batch_size(first,limit,rollouts_per_update,val_every_episodes=0):
+    """Never cross an epoch, a Validation milestone, or a session cap."""
+    size=min(rollouts_per_update,limit-first,325-first%325)
+    if val_every_episodes:
+        size=min(size,val_every_episodes-first%val_every_episodes)
+    return size
 
 
 def request_validation(a, progress, kind):
@@ -169,6 +200,10 @@ def request_validation(a, progress, kind):
 def run(a):
     began = time.monotonic()
     deadline = began+a.max_hours*3600
+    rollouts_per_update=getattr(a,'rollouts_per_update',a.workers)
+    val_every_episodes=getattr(a,'val_every_episodes',0)
+    if not 1 <= rollouts_per_update <= 8 or val_every_episodes<0:
+        raise ValueError('Invalid rollout batch/episode Validation interval')
     if not torch.cuda.is_available() or torch.cuda.device_count() < a.workers:
         raise RuntimeError(f"Requires {a.workers} visible CUDA GPUs for frozen-detector workers")
     if not 32 <= a.frames <= 512 or not 32 <= a.validation_frames <= 512:
@@ -193,6 +228,7 @@ def run(a):
     rc = RewardConfig(reward_mode, a.rate_mode, a.beta, a.rate_tolerance)
     pc = PPOConfig(gamma=1. if reward_mode == "clip-delta" else .99,
                    gae_lambda=1. if reward_mode == "clip-delta" else .95,
+                   minibatch=getattr(a,'ppo_minibatch',32),actor_lr=getattr(a,'actor_lr',1e-4),
                    auxiliary=a.auxiliary if a.auxiliary is not None else (.1 if mc.content else 0.),
                    credit_assignment=getattr(a,'credit_assignment',None) or ('counterfactual-final' if reward_mode == 'clip-delta' else 'joint-gae'),
                    paired_baseline=reward_mode == 'clip-delta' and getattr(a,'credit_assignment',None) != 'joint-gae',
@@ -205,6 +241,10 @@ def run(a):
         "seed":a.seed, "epochs":a.epochs, "frames":a.frames,
         "validation_frames":a.validation_frames, "workers":a.workers,
         "encoder_threads":4, "decoder_threads":4, "val_every_updates":a.val_every_updates,
+        'rollouts_per_update':rollouts_per_update,'val_every_episodes':val_every_episodes,
+        'collection_version':'frozen-multiclip-waves-v1',
+        'validation_clock':'episodes' if val_every_episodes else 'legacy-updates',
+        'validation_spatial_controls':getattr(a,'validation_spatial_controls',False),
         "schedule_version":"interleaved-65-videos-v2", "split_ids_sha256":
         __import__("hashlib").sha256(json.dumps(splits, sort_keys=True).encode()).hexdigest()}
     experiment.update(deployment_rule='argmax',validation_diagnostic_seeds=[20261117,20261143],
@@ -239,22 +279,23 @@ def run(a):
         initialize_detector_assets(a.repo, lock)
         # Recover an interruption between the PPO commit and Val scheduling.
         # A fresh run also proves byte identity before its first PPO update.
-        kind = due_validation(progress,a.val_every_updates)
+        kind = due_validation(progress,a.val_every_updates,every_episodes=val_every_episodes)
         if kind:
             request_validation(a, progress, kind)
         if not validate_pending(a, progress, experiment, deadline):
             return
         start = len(progress["completed"])
         limit = min(len(plan), start+a.max_episodes) if a.max_episodes else len(plan)
-        print(f"V4_TRAIN_INIT completed={start} session_target={limit} total={len(plan)} "
+        print(f"V4_TRAIN_INIT completed={start} session_target={limit} total={len(plan)} rollouts_per_update={rollouts_per_update} workers={a.workers} "
               f"new_run={start == 0} model={MODEL_VERSION}", flush=True)
         capacity = {}
         # Keep each PPO batch inside an epoch. One final worker is valid.
         first = start
         while first < limit:
-            if time.monotonic()+a.worker_timeout+600 >= deadline:
+            size = next_batch_size(first,limit,rollouts_per_update,val_every_episodes)
+            waves=(size+a.workers-1)//a.workers
+            if time.monotonic()+waves*a.worker_timeout+600 >= deadline:
                 break
-            size = min(a.workers, limit-first, 325-first%325)
             checkpoint = a.output/progress["latest_checkpoint"]
             ckpt_sha = sha256_file(checkpoint)
             jobs = []
@@ -268,7 +309,8 @@ def run(a):
                     "frames":a.frames, "start":offset, "seed":a.seed+100000+step,
                     "paired":pc.paired_baseline,
                     "output":new_attempt(a.output/"episodes"/f"episode_{step+1:06d}")})
-            run_jobs(jobs, a.repo, a.decoder, checkpoint, a.input_root, a.worker_timeout)
+            if not run_frozen_jobs(jobs,a.repo,a.decoder,checkpoint,a.input_root,a.worker_timeout,a.workers,deadline,runner=run_jobs):
+                break
             if sha256_file(checkpoint) != ckpt_sha:
                 raise ValueError("Collecting checkpoint changed")
             ckpt, model, trainer = load(checkpoint, experiment, train=True)
@@ -307,6 +349,9 @@ def run(a):
                 for (_,rr),ss in zip(batches,summaries)]) if pc.credit_assignment != 'joint-gae' else None)
             metrics = trainer.update(state, actions, old_lp, old_value, rewards, dones, targets,
                                      outcomes,baseline_scores,final_scores)
+            metrics['collection']={'clips':size,'waves':waves,'workers':a.workers,
+                'unique_videos':len({s['video_id'] for s in summaries}),
+                'complete_episode_boundaries':int(dones.sum()),'policy_sha256':ckpt_sha}
             metrics["feature_audit"] = {
                 "local_channel_mean":state["local"].mean((0,2,3)).tolist(),
                 "local_channel_std":state["local"].std((0,2,3),unbiased=False).tolist(),
@@ -328,7 +373,7 @@ def run(a):
                 "metrics":metrics, "transitions":len(rows)})
             progress.update(latest_checkpoint=updated.relative_to(a.output).as_posix(),
                             latest_sha256=sha256_file(updated))
-            kind = due_validation(progress,a.val_every_updates,session_end=first+size == limit)
+            kind = due_validation(progress,a.val_every_updates,session_end=first+size == limit,every_episodes=val_every_episodes)
             if kind:
                 stage_validation(progress,kind)
             commit_progress(a.output, progress)  # sole commit point after both rollouts + PPO + checkpoint
@@ -372,6 +417,11 @@ def main():
     p.add_argument("--max-episodes", type=int, default=10, help="ADDITIONAL episodes;0 finishes the locked schedule")
     p.add_argument("--seed", type=int, default=20261109)
     p.add_argument("--workers", type=int, choices=(1,2), default=2)
+    p.add_argument('--rollouts-per-update',type=int,choices=range(1,9),default=4)
+    p.add_argument('--ppo-minibatch',type=int,default=64)
+    p.add_argument('--actor-lr',type=float,default=1e-4)
+    p.add_argument('--val-every-episodes',type=int,default=20,help='0 enables the legacy update-count clock')
+    p.add_argument('--validation-spatial-controls',action=argparse.BooleanOptionalAction,default=True)
     p.add_argument("--val-every-updates", type=int, default=25)
     p.add_argument("--worker-timeout", type=int, default=1800)
     p.add_argument("--max-hours", type=float, default=11.5)

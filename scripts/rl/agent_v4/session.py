@@ -114,6 +114,8 @@ def run_jobs(jobs, repo, decoder, checkpoint, input_root, timeout):
                 cmd.extend(["--paired", "--stochastic-validation" if job.get('stochastic_validation') else "--deterministic"])
                 if job.get("zero_gate"):
                     cmd.append("--zero-gate")
+                if job.get('spatial_controls'):
+                    cmd.append('--spatial-controls')
             elif job.get('paired'):
                 cmd.append('--paired')
             log = job["output"].with_suffix(".log")
@@ -166,5 +168,31 @@ def read_summary(job, checkpoint_sha, experiment):
         raise ValueError("Rollout checksum changed")
     if sha256_file(out/"reference_8bit.yuv") != summary["source_sha256"]:
         raise ValueError("Source checksum changed")
+    if job.get('spatial_controls') and set(summary.get('spatial_controls',{})) != {'uniform_minus1','frame_uniform_replay'}:
+        raise ValueError('Missing declared spatial controls')
     return summary
+
+
+def run_frozen_jobs(jobs, repo, decoder, checkpoint, input_root, timeout, workers, deadline=None, runner=None):
+    """Collect immutable-policy clips in waves on the available GPUs.
+
+    Failed/abandoned waves never publish a partial batch to PPO. The next
+    session recollects attempts using its last committed policy.
+    """
+    if not jobs or workers not in (1,2):
+        raise ValueError('Invalid frozen collection batch')
+    digest=sha256_file(checkpoint)
+    waves=(len(jobs)+workers-1)//workers
+    collect=run_jobs if runner is None else runner
+    for wave,first in enumerate(range(0,len(jobs),workers),1):
+        if sha256_file(checkpoint)!=digest:
+            raise ValueError('Frozen collecting checkpoint changed between waves')
+        if deadline is not None and time.monotonic()+timeout+600>=deadline:
+            print('V4_FROZEN_BATCH_ABANDONED budget reserve; no update committed',flush=True)
+            return False
+        print(f'V4_FROZEN_BATCH_WAVE {wave}/{waves} clips={len(jobs[first:first+workers])} policy={digest}',flush=True)
+        collect(jobs[first:first+workers],repo,decoder,checkpoint,input_root,timeout)
+        if sha256_file(checkpoint)!=digest:
+            raise ValueError('Frozen collecting checkpoint changed during a wave')
+    return True
 

@@ -1,5 +1,18 @@
 # VVenC-RL: PPO-QP for Object Detection
 
+## Current training revision: frozen multi-clip PPO (2026-11-10)
+
+The pilot50 at283a16e completed, with a positive greedy quick-Val signal but
+mostly frame-uniform deltas and no sampled-probe improvement. The next
+experiment separates GPU concurrency from rollout batch size: four frozen-
+policy clips in two waves on two GPUs, minibatch64, episode-based Validation,
+spatial credit/gradient diagnostics and measured uniform/frame-replay controls.
+The updated notebook defaults to a **new10-episode smoke test**. Old pilot50
+checkpoints cannot migrate. Native/FPP1, architecture, reward and learning rate
+are retained; improved real learning is unproven until the new pilot runs.
+Read [research and limitations](docs/AGENT_V4_MULTICLIP_RESEARCH.md) and
+[current run instructions](docs/AGENT_V4_MULTICLIP_RUN.md).
+
 ## Current runtime repair: v4.2 FPP1 (2026-11-10)
 
 Start a **new FPP1 run**, including when the previous v4.2 run stopped at iter0.
@@ -9,7 +22,8 @@ source/binary stays unchanged. Three runtime groups passed9/9 repeats each on
 the failing Val clip; broader native/headroom/initial Val gates precede PPO.
 Paired vanilla is freshly encoded with FPP1; the old500-pair outputs are not a
 compatible anchor. See [evidence and protocol](docs/AGENT_V42_FPP1_PROFILE.md).
-The existing pilot notebook name is retained and defaults to new50 episodes.
+The existing pilot notebook name is retained; its current default is new10
+episodes for the multi-clip revision above.
 The [training readiness repair](docs/AGENT_V42_TRAINING_READINESS.md) also uses
 measured float64 clip deltas, atomically stages Validation with checkpoint
 commits and exports setup-failure evidence before training progress exists.

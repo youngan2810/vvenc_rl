@@ -1,5 +1,11 @@
 # Agent v4.2 — sửa cơ chế học sau pilot v4.1
 
+**Cập nhật sau pilot50:** source283a16e đã chạy đủ50 episode/25 update.
+Greedy quick Val tăng1,105 điểm F1, actual bitrate tăng1,383%; phần lớn delta
+vẫn đồng nhất trong frame và sampled probe chưa tốt hơn khởi tạo. Revision
+hiện hành: [frozen multi-clip PPO](AGENT_V4_MULTICLIP_RESEARCH.md), yêu cầu
+new10 smoke; các hợp đồng dưới đây mô tả nền thuật toán v4.2 trước revision đó.
+
 Trạng thái: đã triển khai và kiểm thử CPU. Run Kaggle v4.2 đầu dừng tại initial
 Val do native zero-stream drift, trước mọi episode Train/PPO update. Chưa có
 gain RL chất lượng thực nghiệm. Runtime hiện tại dùng experiment FPP1 mới;

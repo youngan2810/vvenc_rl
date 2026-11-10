@@ -26,6 +26,7 @@ def main():
     p.add_argument("--input-root",type=Path,default=Path("/kaggle/input"))
     p.add_argument("--workers",type=int,choices=(1,2),default=2)
     p.add_argument("--quick",action="store_true",help="4 pairs, diagnostic only")
+    p.add_argument('--spatial-controls',action='store_true',help='Add measured uniform/frame-replay diagnostics; no selection')
     p.add_argument("--max-hours",type=float,default=11.5)
     a = p.parse_args()
     if not math.isfinite(a.max_hours) or a.max_hours <= 0:
@@ -56,8 +57,8 @@ def main():
             "validation_kind":"quick" if a.quick else "full", "completed":[],"updates":[],"validations":[],
             "latest_checkpoint":"checkpoints/frozen.pt","latest_sha256":sha256_file(frozen)}
         request_validation(a,progress,"quick" if a.quick else "full")
-    initialize_detector_assets(a.repo,read_baseline_config(a.input_root))
     try:
+        initialize_detector_assets(a.repo,read_baseline_config(a.input_root))
         validate_pending(a,progress,exp,time.monotonic()+a.max_hours*3600)
     finally:
         print(export_results(a.output))

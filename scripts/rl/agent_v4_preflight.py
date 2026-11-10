@@ -53,6 +53,10 @@ def run(repo, encoder, decoder, output):
                 raise ValueError("Action file != recorded policy action")
         errors = None
         if not deterministic:
+            replay,_=encode_fixed_map(encoder,source,output/'sampled_fixed_replay',frames,rate,
+                [next(r['action'] for r in rows if r['poc']==p) for p in range(frames)],4)
+            if sha256_file(replay)!=sha256_file(stream):
+                raise ValueError('Sampled live actions must reproduce the fixed-map stream before spatial controls')
             with SourceFrames(source,frames) as source_frames:
                 states = stack_states(rows,source_frames,True)
             errors = trainer.parity(states,torch.tensor([r["action"] for r in rows]),
@@ -71,6 +75,7 @@ def run(repo, encoder, decoder, output):
         "encoder_sha256":sha256_file(encoder),"decoder_sha256":sha256_file(decoder),
         "checkpoint_sha256":original_sha,"cases":results,
         "quality_claim":False,"ppo_updates":0}
+    summary['sampled_live_fixed_replay_byte_identity']=True
     atomic_json(output/"preflight.json",summary)
     print(summary["gate"],flush=True)
 
