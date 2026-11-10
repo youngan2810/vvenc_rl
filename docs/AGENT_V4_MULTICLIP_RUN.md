@@ -1,5 +1,11 @@
 # Run the new multi-clip pilot
 
+**Current user-requested default:** [exactly one epoch /325 episodes](AGENT_V4_EPOCH1_RUN.md).
+The notebook now sets `NEW_EPOCHS=1` and cap325, with a one-epoch resume guard
+and explicit completion status. The smoke10 instructions below are historical
+and explain the earlier pilot configuration; do not use their cap/epoch plan
+for the updated one-epoch launcher.
+
 The [follow-up source review](AGENT_V4_SOURCE_REVIEW.md) additionally requires
 actual completed-episode metadata in checkpoints. Standalone Validation now
 reports the candidate's true episode/update count, automatically enables the

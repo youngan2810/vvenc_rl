@@ -2,6 +2,11 @@
 
 ## Current training revision: frozen multi-clip PPO (2026-11-10)
 
+**Current requested run:** the notebook now defaults to exactly one new epoch
+(325 episodes), with quick Validation every20 episodes and full35 pairs at the
+end. It resumes across sessions and never starts epoch2. Read the
+[one-epoch launcher instructions](docs/AGENT_V4_EPOCH1_RUN.md).
+
 The [follow-up source review](docs/AGENT_V4_SOURCE_REVIEW.md) fixes standalone
 candidate episode labeling/incomplete exit status and removes a redundant actor
 forward. Reviewed checkpoints record actual completed episodes; the new10
@@ -12,7 +17,8 @@ mostly frame-uniform deltas and no sampled-probe improvement. The next
 experiment separates GPU concurrency from rollout batch size: four frozen-
 policy clips in two waves on two GPUs, minibatch64, episode-based Validation,
 spatial credit/gradient diagnostics and measured uniform/frame-replay controls.
-The updated notebook defaults to a **new10-episode smoke test**. Old pilot50
+The earlier smoke default was10 episodes; the current user-requested default
+is a **new one-epoch run** as documented above. Old pilot50
 checkpoints cannot migrate. Native/FPP1, architecture, reward and learning rate
 are retained; improved real learning is unproven until the new pilot runs.
 Read [research and limitations](docs/AGENT_V4_MULTICLIP_RESEARCH.md) and

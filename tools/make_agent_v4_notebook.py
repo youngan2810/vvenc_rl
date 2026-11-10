@@ -14,19 +14,21 @@ def cell(kind, text):
 
 
 cells = [cell("markdown", """
-# VVenC Agent v4 — frozen multi-clip PPO / FPP1
+# VVenC Agent v4 — epoch1 / frozen multi-clip PPO / FPP1
 
 Đây là run **v4 mới**, không resume EP650. T4×2, Internet ON.
 Input: locked65/7/100 manifest + Baseline protocol lock + BDD100K Train00 MOV.
-Lần đầu: `MODE='new'`,10 episode smoke test của bản multi-clip mới. Review trước khi tăng tiếp.
+Lần đầu: `MODE='new'`, chạy mới đúng1 epoch theo yêu cầu:65 video ×5 rates =325 episode.
 Resume v4: đổi MODE và đặt RESUME_INPUT là đường dẫn ZIP hoặc thư mục
 đã giải nén của **VVC_AGENT_V4_RESUME**; cấu hình/commit được kế thừa tự động.
 Không dùng EXPORT_5, bundle Test EP650 hoặc checkpoint pilot v4.1. V4.2 là
 experiment mới: paired Train, critic phản thực, auxiliary task-outcome.
 Quick Val =4 greedy pairs +8 sampled diagnostic pairs (2 seed cố định).
-Pilot10 có3 PPO update (4+4+2 clip), chưa đủ kết luận learning gain.
-Review xong mới resume thêm40 để đạt tổng50. Quick Val theo mốc episode20/40
-và cuối session, không theo số update; full Val35 cặp mỗi325 episode.
+Plan chỉ có1 epoch, không tự sang epoch2. Tổng83.200 frame Train;
+nếu không cắt batch bằng cap khác thì có82 PPO update (81×4 clip +1 clip).
+Quick Val ở0/20/40/.../320 episode; full Val35 cặp ở325.
+Một phiên có budget11,75h gồm setup nên có thể dừng trước325; cần tải ZIP và
+resume cùng experiment ở phiên sau. Không dùng return code0 để suy ra đã xong epoch.
 Runtime mới: **4 encoder threads, MaxParallelFrames=1**, golden binary giữ nguyên.
 Paired vanilla dùng cùng runtime mới. Không so trực tiếp với bảng baseline500 cũ.
 Không resume checkpoint pilot50 cũ từ283a16e. Update contract và batching đã đổi.
@@ -38,7 +40,7 @@ Nếu setup/gate lỗi, notebook tự xuất `VVC_AGENT_V4_KAGGLE_SESSION.zip` c
 traceback và log hiện có, kể cả khi chưa tạo training progress.
 """), cell("code", """
 MODE = 'new'  # 'new' hoặc 'resume'
-MAX_ADDITIONAL_EPISODES = 10
+MAX_ADDITIONAL_EPISODES = 325  # Plan1 epoch tự chặn ở tổng325, kể cả khi resume
 RESUME_INPUT = ''  # Ví dụ /kaggle/input/datasets/owner/v4-session/VVC_AGENT_V4_RESUME
 SOURCE_COMMIT = ''  # New: trống=resolve branch rồi ghi SHA; resume: lấy từ archive
 SESSION_HOURS = 11.75  # Tổng budget từ đầu notebook, gồm setup; driver dành thời gian export
@@ -50,7 +52,7 @@ NEW_ACTOR_LR = 1e-4  # Giữ nguyên để tách hiệu ứng batching
 NEW_VAL_EVERY_EPISODES = 20
 NEW_SPATIAL_CONTROLS = True
 RUN_HEADROOM_DIAGNOSTIC = True  # Train-only, no PPO; chỉ chạy khi MODE=new
-NEW_EPOCHS, NEW_SEED = 3, 20261109
+NEW_EPOCHS, NEW_SEED = 1, 20261109
 assert MODE in ('new','resume') and MAX_ADDITIONAL_EPISODES >= 0
 assert MODE == 'resume' or not RESUME_INPUT, 'Có resume input: chọn MODE=resume'
 """), cell("code", r'''
@@ -142,6 +144,7 @@ if MODE=='resume':
     assert EXP.get('collection_version')=='frozen-multiclip-waves-v1', 'NEW multi-clip run required; keep the old pilot50 as control'
     assert EXP.get('update_version')=='frozen-multiclip-ctu-ppo-outcome-v4', 'Use the launcher pinned to this update contract'
     assert EXP.get('checkpoint_metadata_version')=='completed-episodes-v1', 'NEW reviewed run required; older checkpoints do not record episode count'
+    assert EXP.get('epochs')==1, 'This launcher targets exactly one epoch; use the original launcher for an older three-epoch experiment'
     print('RESUME_V4_EPISODES_BEFORE',len(prior['completed']))
 else:
     EXP=None
@@ -221,7 +224,7 @@ with (LOGS/'pip_freeze.txt').open('w') as f:
     subprocess.run([sys.executable,'-m','pip','freeze'],stdout=f,stderr=subprocess.STDOUT,check=True)
 """), cell("markdown", """
 ## Training và paired Val
-Mặc định10 episode smoke mới, không tự chạy325/975. Resume kế thừa nguyên cấu hình,
+Mặc định đúng1 epoch/325 episode, không tự chạy975. Resume kế thừa nguyên cấu hình,
 chỉ đổi số episode bổ sung/thời gian. Driver xuất resume sau mỗi PPO commit;
 khi lỗi thường vẫn xuất evidence trong finally. Không cam kết batch đang ghi
 sẽ còn nguyên nếu VM hard-kill. Theo dõi progress thật ở cell cuối.
@@ -259,6 +262,13 @@ print('TRAIN_PROCESS_RETURN_CODE',TRAIN_RC)
 from IPython.display import display,FileLink
 session=WORK/'VVC_AGENT_V4_KAGGLE_SESSION.zip'
 if not session.exists():session=export_session(globals())
+if (RUN/'progress.json').exists():
+    progress=json.loads((RUN/'progress.json').read_text())
+    completed=len(progress['completed'])
+    full_val_done=any(v['kind']=='full' and v['episodes']==325 and v['pairs']==35 for v in progress['validations'])
+    print('EPOCH1_STATUS','COMPLETE' if completed==325 and full_val_done and not progress.get('pending_validation') else 'INCOMPLETE',
+          'COMPLETED',completed,'REMAINING_EPISODES',max(0,325-completed),
+          'FULL35_VAL_DONE',full_val_done,'PENDING_VAL',progress.get('pending_validation'))
 display(FileLink(str(session)))
 for name in ('VVC_AGENT_V4_RESUME.zip','VVC_AGENT_V4_RESULTS.zip'):
     if (RUN/name).is_file():display(FileLink(str(RUN/name)))

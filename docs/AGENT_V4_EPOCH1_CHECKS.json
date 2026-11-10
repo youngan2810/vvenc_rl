@@ -1,0 +1,50 @@
+{
+  "schema": "vvenc-agent-v4-epoch1-launcher/1",
+  "date": "2026-11-10",
+  "base_commit": "470d5751b47ecc20b47192af52f56c7bc7822cd7",
+  "algorithm_changed": false,
+  "reviewed_core_tests_passed": 170,
+  "current_launcher_tests_passed": 7,
+  "launcher_test_exit_code": 0,
+  "notebook_sha256": "7e8c01bd5f9453603bd0d698d16e2c76df23258756a52dbf0ad5f49a69c7a45e",
+  "launcher_test_log_sha256": "19f8cfd65a5a2836523e264558dda1aabd88f8b3f59bebdb67b03a9e886c72d4",
+  "plan": {
+    "epochs": 1,
+    "episodes": 325,
+    "frames_per_episode": 256,
+    "train_frame_transitions": 83200,
+    "updates_without_intermediate_cap": 82,
+    "last_batch_clips": 1,
+    "quick_val_episode_marks": [
+      0,
+      20,
+      40,
+      60,
+      80,
+      100,
+      120,
+      140,
+      160,
+      180,
+      200,
+      220,
+      240,
+      260,
+      280,
+      300,
+      320
+    ],
+    "full_val_episode_mark": 325,
+    "full_val_pairs": 35,
+    "workers": 2,
+    "rollouts_per_update": 4
+  },
+  "first_epoch_matches_previous_three_epoch_plan": true,
+  "final_cell_status_cases": [
+    "EPOCH1_STATUS INCOMPLETE COMPLETED 80 REMAINING_EPISODES 245 FULL35_VAL_DONE False PENDING_VAL None",
+    "EPOCH1_STATUS INCOMPLETE COMPLETED 325 REMAINING_EPISODES 0 FULL35_VAL_DONE False PENDING_VAL {'kind': 'full'}",
+    "EPOCH1_STATUS COMPLETE COMPLETED 325 REMAINING_EPISODES 0 FULL35_VAL_DONE True PENDING_VAL None"
+  ],
+  "gpu_native_training_launched": false,
+  "session_limit": "11.75 hours including setup; completion may require resume across sessions"
+}

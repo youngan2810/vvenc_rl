@@ -28,6 +28,11 @@ class EpisodeProvenance(unittest.TestCase):
         code=compile(ast.Module(body=[guard],type_ignores=[]),'resume-guard','exec')
         exec(code,dict(EXP={'checkpoint_metadata_version':'completed-episodes-v1'}))
         with self.assertRaises(AssertionError):exec(code,dict(EXP={}))
+        epoch_guard=next(n for n in ast.walk(ast.parse(setup)) if isinstance(n,ast.Assert) and
+            any(isinstance(t,ast.Constant) and t.value=='epochs' for t in ast.walk(n)))
+        code=compile(ast.Module(body=[epoch_guard],type_ignores=[]),'epoch-guard','exec')
+        exec(code,dict(EXP={'epochs':1}))
+        with self.assertRaises(AssertionError):exec(code,dict(EXP={'epochs':3}))
 
     def make_candidate(self,root):
         model=Agent(ModelConfig(content=False));trainer=Trainer(model,PPOConfig(auxiliary=0.))

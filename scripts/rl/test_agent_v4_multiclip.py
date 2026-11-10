@@ -210,18 +210,20 @@ class MeasuredControls(unittest.TestCase):
 
 
 class NotebookContracts(unittest.TestCase):
-    def test_new10_and_resume40_keep_the_frozen_experiment_configuration(self):
+    def test_epoch1_and_resume_keep_the_frozen_experiment_configuration(self):
         nb=Path(__file__).resolve().parents[2]/'notebooks/VVenC_Agent_v4_Pilot_Kaggle.ipynb'
         cells=json.loads(nb.read_text(encoding='utf-8'))['cells']
         config={};exec(cells[1]['source'],config)
-        self.assertEqual(config['MAX_ADDITIONAL_EPISODES'],10)
+        self.assertEqual(config['MAX_ADDITIONAL_EPISODES'],325)
+        self.assertEqual(config['NEW_EPOCHS'],1)
         commands=[]
         ns=dict(config,Path=Path,sys=sys,time=types.SimpleNamespace(monotonic=lambda:0),SESSION_START=0,
             EXP=None,REPO=Path('/repo'),DEC=Path('/dec'),RUN=Path('/nonexisting/run'),RESUME_ARCHIVE=None,
             run=lambda cmd,**kw:commands.append(cmd) or 0,export_session=lambda ctx:None,record_session_failure=lambda ctx:None)
         exec(cells[6]['source'],ns)
         previous=json.loads(json.dumps(ns['cfg']))
-        ns.update(EXP=previous,MAX_ADDITIONAL_EPISODES=40,RESUME_ARCHIVE=Path('/input/resume.zip'),
+        ns.update(EXP=previous,MAX_ADDITIONAL_EPISODES=325,RESUME_ARCHIVE=Path('/input/resume.zip'),
+            NEW_EPOCHS=3,
             NEW_ROLLOUTS_PER_UPDATE=8,NEW_PPO_MINIBATCH=128,NEW_ACTOR_LR=.2,
             NEW_VAL_EVERY_EPISODES=99,NEW_SPATIAL_CONTROLS=False)
         exec(cells[6]['source'],ns)
@@ -229,7 +231,8 @@ class NotebookContracts(unittest.TestCase):
             for option,value in [('--rollouts-per-update',4),('--ppo-minibatch',64),('--actor-lr',1e-4),('--val-every-episodes',20)]:
                 self.assertEqual(cmd[cmd.index(option)+1],value)
             self.assertIn('--validation-spatial-controls',cmd)
-            self.assertEqual(cmd[cmd.index('--max-episodes')+1],10 if i==0 else 40)
+            self.assertEqual(cmd[cmd.index('--max-episodes')+1],325)
+            self.assertEqual(cmd[cmd.index('--epochs')+1],1)
         self.assertNotIn('--resume-archive',commands[0]);self.assertIn('--resume-archive',commands[1])
 
     def test_update_and_collection_guard_match_source(self):
