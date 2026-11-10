@@ -1,5 +1,10 @@
 # Chạy Agent v4.2
 
+Runtime hiện tại là **FPP1 mới**:4 encoder threads, `MaxParallelFrames=1`,
+4 decoder threads. Xem [bằng chứng và giới hạn](AGENT_V42_FPP1_PROFILE.md).
+Phải tạo run mới cả khi run v4.2 cũ chỉ tới iter0; không resume archive trước FPP1.
+RL và paired vanilla dùng cùng runtime, không dùng bảng500 baseline cũ làm anchor.
+
 V4.2 bắt đầu **run mới**, schema `vvenc-agent-v4/2`. Không dùng pilot10 v4.1,
 EXPORT_5/EP650 hoặc Test export làm resume. Source/weights/optimizer thay đổi;
 checkpoint v4.1 bị từ chối. V3 và đánh giá EP650 giữ nguyên. Đọc
@@ -19,8 +24,8 @@ RUN_HEADROOM_DIAGNOSTIC = True
 SESSION_HOURS = 11.75
 ```
 
-Working output mới là `/kaggle/working/vvc_agent_v42_run`, setup logs ở
-`/kaggle/working/v42_setup_logs`. Wrapper đã stream các dòng V4_* ra màn hình
+Working output mới là `/kaggle/working/vvc_agent_v42_fpp1_run`, setup logs ở
+`/kaggle/working/v42_fpp1_setup_logs`. Wrapper đã stream các dòng V4_* ra màn hình
 và vẫn giữ full log. Không sửa source/kernel của một job đang chạy.
 
 Notebook có sẵn: [VVenC_Agent_v4_Pilot_Kaggle.ipynb](../notebooks/VVenC_Agent_v4_Pilot_Kaggle.ipynb). Source của notebook được tạo bởi `tools/make_agent_v4_notebook.py`; notebook chỉ build/kiểm tra/gọi runner, không chứa bản sao thuật toán. Lần đầu giữ `MODE='new'`,50 episode. Lần resume đổi `MODE='resume'` và đặt `RESUME_INPUT`; notebook tự đọc các cấu hình còn lại từ bundle.
@@ -40,7 +45,7 @@ python -m unittest discover -s scripts/rl -p 'test_*.py'
 python scripts/rl/agent_v4_preflight.py --repo /kaggle/working/vvenc_rl_v4 \
   --encoder /kaggle/working/vvenc_rl_v4/bin/release-static/vvencapp \
   --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
-  --output /kaggle/working/v4_native_preflight
+  --output /kaggle/working/v42_fpp1_native_preflight
 ```
 
 Preflight không dùng YOLO hoặc dữ liệu Train/Test. Nếu không PASS thì kiểm tra log trước; không bỏ assert hash/POC.
@@ -51,7 +56,7 @@ Preflight không dùng YOLO hoặc dữ liệu Train/Test. Nếu không PASS th�
 python -u scripts/rl/agent_v4_train.py \
   --repo /kaggle/working/vvenc_rl_v4 \
   --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
-  --output /kaggle/working/vvc_agent_v42_run \
+  --output /kaggle/working/vvc_agent_v42_fpp1_run \
   --preset content-task --epochs 3 --frames 256 --workers 2 \
   --validation-frames 256 --seed 20261109 --val-every-updates 10 \
   --reward clip-delta --rate-mode symmetric --beta .1 --rate-tolerance 0 \
@@ -83,12 +88,12 @@ Nếu native gate fail thì dừng để xem evidence; không bỏ check. CLI ri
 python -u scripts/rl/agent_v4_headroom.py \
   --repo /kaggle/working/vvenc_rl_v4 \
   --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
-  --output /kaggle/working/v42_train_headroom \
+  --output /kaggle/working/v42_fpp1_train_headroom \
   --index 0 --rates 50 120 --frames 256 --repeats 2 --max-hours 1.5
 ```
 
 Diagnostic này không update weights. Nếu nó fail trước khi có training progress,
-evidence riêng ở `v42_train_headroom/VVC_AGENT_V4_RESULTS.zip` và `headroom.json`;
+evidence riêng ở `v42_fpp1_train_headroom/VVC_AGENT_V4_RESULTS.zip` và `headroom.json`;
 không thể xuất training session đầy đủ khi chưa có checkpoint training.
 
 Trong log cần thấy `V4_PPO_UPDATE_PASS`, số completed tăng đúng, LP/value parity đạt, các loss hữu hạn và clip score thực tế. Xem cả sampled-vs-deterministic nonzero, delta F1 và actual kbps. Không đặt điều kiện bắt buộc agent phải chọn nhiều nonzero.
@@ -108,7 +113,7 @@ Thêm RESUME vào Kaggle Input, dùng output mới/rỗng và **giữ nguyên m�
 python -u scripts/rl/agent_v4_train.py \
   --repo /kaggle/working/vvenc_rl_v4 \
   --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
-  --output /kaggle/working/vvc_agent_v42_run \
+  --output /kaggle/working/vvc_agent_v42_fpp1_run \
   --resume-archive /kaggle/input/YOUR_DATASET/VVC_AGENT_V4_RESUME.zip \
   --preset content-task --epochs 3 --frames 256 --workers 2 \
   --validation-frames 256 --seed 20261109 --val-every-updates 10 \
@@ -137,7 +142,7 @@ Có thể kiểm một checkpoint pilot ngay, không phải đợi325 episode:
 python -u scripts/rl/agent_v4_validate.py \
   --repo /kaggle/working/vvenc_rl_v4 \
   --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
-  --checkpoint /kaggle/working/vvc_agent_v42_run/checkpoints/iter_000005.pt \
+  --checkpoint /kaggle/working/vvc_agent_v42_fpp1_run/checkpoints/iter_000005.pt \
   --output /kaggle/working/v4_candidate_val --workers 2
 ```
 

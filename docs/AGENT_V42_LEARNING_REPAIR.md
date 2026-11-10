@@ -1,7 +1,10 @@
 # Agent v4.2 — sửa cơ chế học sau pilot v4.1
 
-Trạng thái: đã triển khai và kiểm thử CPU. Chưa chạy v4.2 với codec/YOLO trên
-Kaggle, chưa có gain chất lượng thực nghiệm. V3 và source C++ không thay đổi.
+Trạng thái: đã triển khai và kiểm thử CPU. Run Kaggle v4.2 đầu dừng tại initial
+Val do native zero-stream drift, trước mọi episode Train/PPO update. Chưa có
+gain RL chất lượng thực nghiệm. Runtime hiện tại dùng experiment FPP1 mới;
+xem [bằng chứng và gate còn chờ](AGENT_V42_FPP1_PROFILE.md).
+V3 và source C++ không thay đổi.
 
 ## Vì sao cần sửa
 

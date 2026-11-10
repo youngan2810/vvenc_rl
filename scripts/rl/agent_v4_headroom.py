@@ -14,7 +14,7 @@ import time
 import torch
 
 from agent_v4.checkpoint import save
-from agent_v4.codec import encode, encode_fixed_map, require_zero_identity
+from agent_v4.codec import encode, encode_fixed_map, require_zero_identity, vanilla_encode, runtime_profile
 from agent_v4.collect import decode_detect
 from agent_v4.model import Agent, PPOConfig, Trainer
 from agent_v4.reward import RewardConfig, occupancy, native_decision_rows, join
@@ -25,7 +25,6 @@ from au_rate_audit import read_au_bits
 from decoder_alignment import require_auditor
 from full_train import atomic_json
 from full_train_dual_gpu import initialize_detector_assets
-from full_validate import vanilla_encode
 from real_reward_pilot import (read_lock_manifest,read_baseline_config,dataset_source,
                               preprocess_mov,load_frozen_yolov5,detect_all,sha256_file)
 from reward_join import read_detections
@@ -56,6 +55,7 @@ def run(a):
     report = {'purpose':'train-only-native-headroom','source_commit':commit,'video_id':vid,
               'split':'train','index':a.index,'frames':a.frames,'repeats':a.repeats,
               'encoder_sha256':sha256_file(encoder),'decoder_sha256':sha256_file(a.decoder),
+              'codec_profile':runtime_profile(),
               'results':[],'ppo_updates':0,'privileged_teacher_maps':True,
               'quality_claim':False}
     try:

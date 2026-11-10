@@ -11,6 +11,7 @@ import torch
 
 from agent_v4 import SCHEMA
 from agent_v4.checkpoint import load
+from agent_v4.codec import require_runtime_profile
 from agent_v4.session import export_results
 from agent_v4.train import request_validation, validate_pending
 from agent_v4.runtime import verify_source
@@ -33,6 +34,7 @@ def main():
         p.error("Missing CUDA workers")
     ckpt,_,_ = load(a.checkpoint)
     exp = ckpt["experiment"]
+    require_runtime_profile(exp)
     verify_source(a.repo,exp)
     a.seed, a.validation_frames, a.worker_timeout = exp["seed"],exp["validation_frames"],1800
     progress_path = a.output/"progress.json"

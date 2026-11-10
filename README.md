@@ -1,5 +1,16 @@
 # VVenC-RL: PPO-QP for Object Detection
 
+## Current runtime repair: v4.2 FPP1 (2026-11-10)
+
+Start a **new FPP1 run**, including when the previous v4.2 run stopped at iter0.
+All v4 live/fixed/vanilla encoding now explicitly uses4threads and
+`MaxParallelFrames=1`, with a required matching native header. Golden native
+source/binary stays unchanged. Three runtime groups passed9/9 repeats each on
+the failing Val clip; broader native/headroom/initial Val gates precede PPO.
+Paired vanilla is freshly encoded with FPP1; the old500-pair outputs are not a
+compatible anchor. See [evidence and protocol](docs/AGENT_V42_FPP1_PROFILE.md).
+The existing pilot notebook name is retained and defaults to new50 episodes.
+
 ## Agent v4.2 learning repair (2026-11-10)
 
 The current `agent-v4-dev` requires a **new v4.2 run**, not a migration of the

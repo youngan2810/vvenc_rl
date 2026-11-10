@@ -9,13 +9,12 @@ import numpy as np
 import torch
 
 from agent_v4.checkpoint import save
-from agent_v4.codec import encode
+from agent_v4.codec import encode, encode_fixed_map, vanilla_encode, runtime_profile
 from agent_v4.model import Agent, ModelConfig, PPOConfig, Trainer
 from agent_v4.reward import RewardConfig
 from agent_v4.state import SourceFrames, stack_states
 from au_rate_audit import read_au_bits
 from decoder_alignment import verify_decode_mapping, require_auditor
-from diagnose_policy import fixed_encode
 from full_train import atomic_json
 from real_reward_pilot import run_cmd, sha256_file
 
@@ -38,8 +37,8 @@ def run(repo, encoder, decoder, output):
     save(checkpoint,model,trainer,{"model_config":asdict(model.config),
         "ppo_config":asdict(trainer.config),"reward":asdict(RewardConfig())},0)
     original_sha = sha256_file(checkpoint)
-    vanilla = fixed_encode(encoder,source,output/"vanilla",frames,rate,None,4)
-    nonzero = fixed_encode(encoder,source,output/"fixed_minus2",frames,rate,-2,4)
+    vanilla = vanilla_encode(encoder,source,output/"vanilla",frames,rate,4)
+    nonzero,_ = encode_fixed_map(encoder,source,output/"fixed_minus2",frames,rate,[[-2]*12 for _ in range(frames)],4)
     if sha256_file(vanilla) == sha256_file(nonzero):
         raise ValueError("Nonzero intervention did not change this synthetic bitstream")
     results = {}
@@ -68,6 +67,7 @@ def run(repo, encoder, decoder, output):
     if sha256_file(checkpoint) != original_sha:
         raise ValueError("Preflight changed checkpoint")
     summary = {"gate":"AGENT_V4_NATIVE_PREFLIGHT_PASS","frames":frames,
+        'codec_profile':runtime_profile(),
         "encoder_sha256":sha256_file(encoder),"decoder_sha256":sha256_file(decoder),
         "checkpoint_sha256":original_sha,"cases":results,
         "quality_claim":False,"ppo_updates":0}

@@ -1,0 +1,83 @@
+{
+  "schema": "vvenc-agent-v42-fpp1-local-checks/1",
+  "date": "2026-11-10",
+  "base_commit": "51af5dc1d5d72a954c0d8fe363e5f74a4b684c0f",
+  "codec_profile": {
+    "version": "golden-vvenc-fpp1/1",
+    "encoder_threads": 4,
+    "decoder_threads": 4,
+    "max_parallel_frames": 1,
+    "gop_size": 32,
+    "lookahead": 1,
+    "qpa": 1,
+    "preset": "medium",
+    "passes": 1,
+    "internal_bitdepth": 10,
+    "mtprofile": -1,
+    "paired_anchor": "fresh-vanilla-same-profile",
+    "historical_500_pair_baseline_compatible": false
+  },
+  "tests": {
+    "passed": 140,
+    "previous_tests": 134,
+    "new_runtime_regressions": 6,
+    "elapsed_seconds": 74.083
+  },
+  "test_log_sha256": "eee6eb0c6c550ffd9eca7d8737e35474918c377b1ff8f71da62f515f087a44d9",
+  "notebook_sha256": "9c69b1d309ade04b73144dc5ba11fc31e805f2fdf49e67b45ad9204367af6d9e",
+  "notebook_validation": "All code cells compile; new50/resume command construction and profile guard dry runs PASS.",
+  "legacy_python_files_unchanged": 47,
+  "native_sources_modified": false,
+  "uploaded_profile_diagnostic": {
+    "archive_sha256": "4d4ac3fabbe0285900337d8d59491a0c2759d650b243e0dc626c03eaf4c60fcd",
+    "manifest_files_verified": 2457,
+    "cases_verified": 27,
+    "phases": {
+      "threads4_fpp1": {
+        "cases": 9,
+        "stream_counts": {
+          "388f0ce758d2071fcde2bfcb3527ec87a4460820e35a7e447526ec72b88417bc": 9
+        },
+        "state_snapshot_hashes": 1,
+        "bytes": 125307,
+        "actual_kbps": 117.4753125,
+        "effective_threads": 4,
+        "effective_parallel_frames": 1
+      },
+      "threads4_fpp0": {
+        "cases": 9,
+        "stream_counts": {
+          "1484609e9fc3da13b6a9693e17ee9c2f538e54c24b66a06a0e899e40732c77f2": 9
+        },
+        "state_snapshot_hashes": 1,
+        "bytes": 124603,
+        "actual_kbps": 116.8153125,
+        "effective_threads": 4,
+        "effective_parallel_frames": 0
+      },
+      "threads1_fpp1": {
+        "cases": 9,
+        "stream_counts": {
+          "388f0ce758d2071fcde2bfcb3527ec87a4460820e35a7e447526ec72b88417bc": 9
+        },
+        "state_snapshot_hashes": 1,
+        "bytes": 125307,
+        "actual_kbps": 117.4753125,
+        "effective_threads": 1,
+        "effective_parallel_frames": 1
+      }
+    },
+    "ppo_updates": 0,
+    "quality_claim": false,
+    "elapsed_seconds": 1315.562067925,
+    "verdict": "THREE_PROFILES_STABLE_ON_ONE_CLIP; FPP1_REQUIRES_BROADER_GATES",
+    "limitations": [
+      "One Val clip at 120 kbps only; not an all-clip determinism proof.",
+      "Encoder/source digests are recorded by the runner; binaries/source are not included for independent rehash.",
+      "No decode, detector or PPO run in this archive."
+    ]
+  },
+  "fpp1_broader_native_gates_executed": false,
+  "fpp1_rl_training_executed": false,
+  "quality_gain_claim": false
+}

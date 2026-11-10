@@ -5,13 +5,12 @@ from pathlib import Path
 import time
 
 from agent_v4.checkpoint import load
-from agent_v4.codec import encode, require_zero_identity
+from agent_v4.codec import encode, require_zero_identity, vanilla_encode, require_runtime_profile
 from agent_v4.reward import RewardConfig, join, native_decision_rows
 from agent_v4.runtime import verify_source
 from au_rate_audit import read_au_bits
 from decoder_alignment import verify_decode_mapping
 from full_train import atomic_json
-from full_validate import vanilla_encode
 from real_reward_pilot import (preprocess_mov, dataset_source, detect_all,
     load_frozen_yolov5, read_lock_manifest, read_baseline_config,
     convert_10bit_to_8bit, run_cmd, sha256_file)
@@ -36,6 +35,7 @@ def collect(repo, decoder, checkpoint, output, input_root, split, index, frames,
             stochastic_validation=False):
     ckpt, model, _ = load(checkpoint)
     exp = ckpt["experiment"]
+    require_runtime_profile(exp)
     verify_source(repo,exp)
     splits, records = read_lock_manifest(input_root)
     lock = read_baseline_config(input_root)

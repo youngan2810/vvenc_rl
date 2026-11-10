@@ -14,7 +14,7 @@ def cell(kind, text):
 
 
 cells = [cell("markdown", """
-# VVenC Agent v4.2 — final-score / CTU credit / task outcome
+# VVenC Agent v4.2 — FPP1 / final-score / CTU credit / task outcome
 
 Đây là run **v4 mới**, không resume EP650. T4×2, Internet ON.
 Input: locked65/7/100 manifest + Baseline protocol lock + BDD100K Train00 MOV.
@@ -25,6 +25,10 @@ Không dùng EXPORT_5, bundle Test EP650 hoặc checkpoint pilot v4.1. V4.2 là
 experiment mới: paired Train, critic phản thực, auxiliary task-outcome.
 Quick Val =4 greedy pairs +8 sampled diagnostic pairs (2 seed cố định).
 Pilot50 có25 PPO update; quick Val ở0/20/40/50 episode nếu phiên đủ thời gian.
+Runtime mới: **4 encoder threads, MaxParallelFrames=1**, golden binary giữ nguyên.
+Paired vanilla dùng cùng runtime mới. Không so trực tiếp với bảng baseline500 cũ.
+Không resume checkpoint của run v4.2 trước FPP1, kể cả checkpoint chưa train.
+Native preflight, Train headroom và initial paired Val phải PASS trước PPO.
 """), cell("code", """
 MODE = 'new'  # 'new' hoặc 'resume'
 MAX_ADDITIONAL_EPISODES = 50
@@ -52,8 +56,8 @@ WORK=Path('/kaggle/working'); INPUT=Path('/kaggle/input')
 # The golden encoder was built at this absolute path. VVenC CHECK/THROW
 # strings contain __FILE__, so changing the source directory can change SHA.
 REPO=WORK/'vvenc_rl_v4'; CODEC=WORK/'vvenc_rl_source'
-VVDEC=WORK/'vvdec_v3_2_0'; RUN=WORK/'vvc_agent_v42_run'
-LOGS=WORK/'v42_setup_logs';LOGS.mkdir(exist_ok=True)
+VVDEC=WORK/'vvdec_v3_2_0'; RUN=WORK/'vvc_agent_v42_fpp1_run'
+LOGS=WORK/'v42_fpp1_setup_logs';LOGS.mkdir(exist_ok=True)
 HEADROOM=None
 CANONICAL='e0b586c46f61e2ebbf131e4eb83f98817ff6e374'
 ENC=REPO/'bin/release-static/vvencapp'; DEC=VVDEC/'bin/release-static/vvdecapp'
@@ -108,6 +112,13 @@ if MODE=='resume':
         prior=json.loads(z.read('progress.json'))
     assert prior['purpose']=='training' and prior['schema']=='vvenc-agent-v4/2'
     EXP=prior['experiment'];SOURCE_COMMIT=EXP['source_commit']
+    # Reject an older runtime BEFORE checking out its pinned source.
+    expected_profile={'version':'golden-vvenc-fpp1/1','encoder_threads':4,'decoder_threads':4,
+        'max_parallel_frames':1,'gop_size':32,'lookahead':1,'qpa':1,'preset':'medium',
+        'passes':1,'internal_bitdepth':10,'mtprofile':-1,
+        'paired_anchor':'fresh-vanilla-same-profile','historical_500_pair_baseline_compatible':False}
+    assert EXP.get('codec_profile')==expected_profile, 'Runtime changed: start a NEW FPP1 run; old progress cannot migrate'
+    assert EXP.get('encoder_threads')==EXP.get('decoder_threads')==4
     print('RESUME_V4_EPISODES_BEFORE',len(prior['completed']))
 else:
     EXP=None
@@ -140,8 +151,9 @@ from real_reward_pilot import read_lock_manifest,read_baseline_config
 splits,records=read_lock_manifest(INPUT);locked=read_baseline_config(INPUT)
 print('V4_SOURCE_PIN',SOURCE_COMMIT,'SPLITS',{k:len(v) for k,v in splits.items()})
 '''), cell("markdown", """
-## Test và build codec giữ nguyên profile
-Build từ canonical checkout riêng. Hash khác thì dừng, không bỏ kiểm tra.
+## Test và build golden codec, runtime FPP1
+Build từ canonical checkout riêng; binary/source giữ nguyên, runtime được khai báo mới.
+Hash khác thì dừng, không bỏ kiểm tra.
 Preflight v4 chạy trên clip synthetic, chưa chứng minh chất lượng task.
 """), cell("code", """
 run([sys.executable,'-m','unittest','discover','-s','scripts/rl','-p','test_*.py'],cwd=REPO)
@@ -155,6 +167,9 @@ if not (VVDEC/'.git').exists():
 run(['cmake','-S',VVDEC,'-B',VVDEC/'build','-DCMAKE_BUILD_TYPE=Release'])
 run(['cmake','--build',VVDEC/'build','--config','Release','-j','2'])
 from agent_v4.train import ENCODER_SHA,DECODER_SHA
+from agent_v4.codec import runtime_profile,require_runtime_profile
+if EXP is not None:require_runtime_profile(EXP)
+print('V4_CODEC_PROFILE',runtime_profile(),flush=True)
 print('ENCODER_SHA256',sha(ENC),'EXPECTED',ENCODER_SHA)
 print('DECODER_SHA256',sha(DEC),'EXPECTED',DECODER_SHA)
 assert sha(ENC)==ENCODER_SHA,(sha(ENC),ENCODER_SHA)
@@ -164,17 +179,17 @@ if not AUDITOR.exists():
     run([sys.executable,REPO/'scripts/rl/build_vvdec_audit.py','--source',VVDEC,
          '--work',WORK/'vvdec_v4_poc_audit','--decoder',DEC])
 from training_session import new_attempt
-PREFLIGHT=new_attempt(WORK/'v4_native_preflight')
+PREFLIGHT=new_attempt(WORK/'v42_fpp1_native_preflight')
 run([sys.executable,REPO/'scripts/rl/agent_v4_preflight.py','--repo',REPO,'--encoder',ENC,
      '--decoder',DEC,'--output',PREFLIGHT])
 
 if MODE=='new' and RUN_HEADROOM_DIAGNOSTIC:
-    HEADROOM=new_attempt(WORK/'v42_train_headroom')
+    HEADROOM=new_attempt(WORK/'v42_fpp1_train_headroom')
     run([sys.executable,'-u',REPO/'scripts/rl/agent_v4_headroom.py','--repo',REPO,'--decoder',DEC,
          '--output',HEADROOM,'--index',0,'--rates',50,120,'--frames',256,'--repeats',2,
          '--max-hours',min(1.5,(SESSION_HOURS*3600-(time.monotonic()-SESSION_START))/3600)])
     print('HEADROOM',json.loads((HEADROOM/'headroom.json').read_text()),flush=True)
-environment={'source_commit':SOURCE_COMMIT,'python':sys.version,'torch':torch.__version__,
+environment={'source_commit':SOURCE_COMMIT,'codec_profile':runtime_profile(),'python':sys.version,'torch':torch.__version__,
  'platform':platform.platform(),'encoder_sha256':sha(ENC),'decoder_sha256':sha(DEC),
  'auditor_sha256':sha(AUDITOR),'baseline_lock_sha256':locked['lock_sha256'],
  'gpu':[torch.cuda.get_device_name(i) for i in range(2)]}

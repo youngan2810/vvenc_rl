@@ -14,6 +14,7 @@ import torch
 
 from agent_v4 import SCHEMA, MODEL_VERSION, STATE_VERSION, UPDATE_VERSION
 from agent_v4.checkpoint import load, save
+from agent_v4.codec import runtime_profile
 from agent_v4.model import Agent, ModelConfig, PPOConfig, Trainer
 from agent_v4.reward import RewardConfig
 from agent_v4.session import (export_resume, export_results, restore,
@@ -192,6 +193,7 @@ def run(a):
         "schedule_version":"interleaved-65-videos-v2", "split_ids_sha256":
         __import__("hashlib").sha256(json.dumps(splits, sort_keys=True).encode()).hexdigest()}
     experiment.update(deployment_rule='argmax',validation_diagnostic_seeds=[20261117,20261143],
+                      codec_profile=runtime_profile(),
                       final_score_target='paired-vanilla-delta' if pc.paired_baseline else (
                           'absolute-final' if pc.credit_assignment != 'joint-gae' else 'discounted-tail'),
                       task_label_contract='global-match-area-conserved-tp-fp-fn-v1',
