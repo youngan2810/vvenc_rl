@@ -12,7 +12,7 @@ from torch.nn import functional as F
 
 from agent_v4 import MODEL_VERSION
 from agent_v4.state import geometry, GLOBAL_DIM, LOCAL_DIM, HISTORY, HISTORY_DIM
-from agent_v4.learning import episode_scores, counterfactual_advantages, merge_actor_gradients
+from agent_v4.learning import episode_scores, measured_episode_scores, counterfactual_advantages, merge_actor_gradients
 from ppo_agent import quantized_action_probabilities, PPOActorCritic
 
 
@@ -256,7 +256,7 @@ class Trainer:
                           for i in range(0,len(state["global"]),size)])
 
     def update(self, state, actions, old_logp, old_values, rewards, dones, occupancy,
-               task_outcomes=None, baseline_scores=None):
+               task_outcomes=None, baseline_scores=None, final_scores=None):
         c = self.config
         parity = self.parity(state, actions, old_logp, old_values)
         n = len(actions)
@@ -271,7 +271,8 @@ class Trainer:
                 raise ValueError("Task auxiliary requires measured local TP/FP/FN [N,12,3]")
         final_credit = c.credit_assignment != 'joint-gae'
         if final_credit:
-            returns = episode_scores(rewards,dones)
+            returns = (measured_episode_scores(rewards,dones,final_scores) if final_scores is not None
+                       else episode_scores(rewards,dones).double())
             if c.paired_baseline:
                 if (baseline_scores is None or baseline_scores.shape != (n,) or
                         not torch.isfinite(baseline_scores).all()):
@@ -281,7 +282,8 @@ class Trainer:
                     if not torch.equal(baseline_scores[first:end+1],baseline_scores[first].expand(end+1-first)):
                         raise ValueError("Baseline score must be constant within its clip")
                     first = end+1
-                returns = returns-baseline_scores
+                returns = returns-baseline_scores.double()
+            returns = returns.to(old_values.dtype)
             # Freeze BEFORE fitting this batch: no chosen-action target can
             # leak into the current actor baseline through a critic update.
             with torch.no_grad():

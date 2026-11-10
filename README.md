@@ -10,6 +10,9 @@ the failing Val clip; broader native/headroom/initial Val gates precede PPO.
 Paired vanilla is freshly encoded with FPP1; the old500-pair outputs are not a
 compatible anchor. See [evidence and protocol](docs/AGENT_V42_FPP1_PROFILE.md).
 The existing pilot notebook name is retained and defaults to new50 episodes.
+The [training readiness repair](docs/AGENT_V42_TRAINING_READINESS.md) also uses
+measured float64 clip deltas, atomically stages Validation with checkpoint
+commits and exports setup-failure evidence before training progress exists.
 
 ## Agent v4.2 learning repair (2026-11-10)
 

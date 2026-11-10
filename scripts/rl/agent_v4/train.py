@@ -142,12 +142,27 @@ def validate_pending(a, progress, experiment, deadline):
     return True
 
 
-def request_validation(a, progress, kind):
+def stage_validation(progress, kind):
+    """Set pending Val in memory, so it commits atomically with a new update."""
     n = len(progress["completed"])
     progress["pending_validation"] = {
         "kind":kind, "episodes":n, "checkpoint":progress["latest_checkpoint"],
         "sha256":progress["latest_sha256"],
         "output":f"validation_{n:06d}_{kind}"}
+
+
+def due_validation(progress, interval, session_end=False):
+    n = len(progress['completed'])
+    kind = ('quick' if n == 0 else 'full' if n%325 == 0 else
+            'quick' if len(progress['updates'])%interval == 0 or session_end else None)
+    if (progress.get('pending_validation') or kind is None or
+            any(v['episodes']==n and v['kind']==kind for v in progress['validations'])):
+        return None
+    return kind
+
+
+def request_validation(a, progress, kind):
+    stage_validation(progress,kind)
     commit_progress(a.output, progress)
 
 
@@ -199,6 +214,8 @@ def run(a):
                       task_label_contract='global-match-area-conserved-tp-fp-fn-v1',
                       policy_surrogate='joint-clipped' if pc.credit_assignment == 'joint-gae' else 'sum-head-clipped',
                       auxiliary_gradient_contract='conflict-projection-global-l2-budget-v1')
+    experiment['final_score_numeric_contract'] = ('legacy-float32-gae-v1' if
+        pc.credit_assignment == 'joint-gae' else 'measured-float64-delta-before-cast-v1')
     plan = create_schedule(a.seed, a.epochs)
     if a.resume_archive:
         restore(a.resume_archive, a.output)
@@ -218,16 +235,13 @@ def run(a):
                     "validations":[], "latest_checkpoint":initial.relative_to(a.output).as_posix(),
                     "latest_sha256":sha256_file(initial)}
         commit_progress(a.output, progress)
-    initialize_detector_assets(a.repo, lock)
     try:
-        n = len(progress["completed"])
+        initialize_detector_assets(a.repo, lock)
         # Recover an interruption between the PPO commit and Val scheduling.
         # A fresh run also proves byte identity before its first PPO update.
-        if (not progress.get("pending_validation") and
-                (n == 0 or n%325 == 0) and
-                not any(v["episodes"] == n and v["kind"] == ("quick" if n == 0 else "full")
-                        for v in progress["validations"])):
-            request_validation(a, progress, "quick" if n == 0 else "full")
+        kind = due_validation(progress,a.val_every_updates)
+        if kind:
+            request_validation(a, progress, kind)
         if not validate_pending(a, progress, experiment, deadline):
             return
         start = len(progress["completed"])
@@ -282,14 +296,17 @@ def run(a):
             actions = torch.tensor([r["action"] for r in rows], dtype=torch.int64)
             old_lp = torch.tensor([r["log_prob"] for r in rows])
             old_value = torch.tensor([r["value"] for r in rows])
-            rewards = torch.tensor([r["reward"] for r in rows])
+            rewards = torch.tensor([r["reward"] for r in rows],dtype=(
+                torch.float32 if pc.credit_assignment == 'joint-gae' else torch.float64))
             dones = torch.tensor([r["done"] for r in rows], dtype=torch.bool)
             targets = torch.tensor([r["teacher_occupancy"] for r in rows])
             outcomes = torch.tensor([r['task_outcomes'] for r in rows])
-            baseline_scores = (torch.cat([torch.full((len(rr),),ss['vanilla']['score'])
+            baseline_scores = (torch.cat([torch.full((len(rr),),ss['vanilla']['score'],dtype=torch.float64)
                 for (_,rr),ss in zip(batches,summaries)]) if pc.paired_baseline else None)
+            final_scores = (torch.cat([torch.full((len(rr),),ss['metrics']['score'],dtype=torch.float64)
+                for (_,rr),ss in zip(batches,summaries)]) if pc.credit_assignment != 'joint-gae' else None)
             metrics = trainer.update(state, actions, old_lp, old_value, rewards, dones, targets,
-                                     outcomes,baseline_scores)
+                                     outcomes,baseline_scores,final_scores)
             metrics["feature_audit"] = {
                 "local_channel_mean":state["local"].mean((0,2,3)).tolist(),
                 "local_channel_std":state["local"].std((0,2,3),unbiased=False).tolist(),
@@ -311,16 +328,16 @@ def run(a):
                 "metrics":metrics, "transitions":len(rows)})
             progress.update(latest_checkpoint=updated.relative_to(a.output).as_posix(),
                             latest_sha256=sha256_file(updated))
+            kind = due_validation(progress,a.val_every_updates,session_end=first+size == limit)
+            if kind:
+                stage_validation(progress,kind)
             commit_progress(a.output, progress)  # sole commit point after both rollouts + PPO + checkpoint
             for job in jobs:
                 cleanup_raw(job["output"])
             first += size
             print(f"V4_PPO_UPDATE_PASS iteration={iteration} episodes={first}/{len(plan)} "
                   f"frames={len(rows)} KL={metrics['exact_final_kl']:.6f}", flush=True)
-            kind = "full" if first%325 == 0 else (
-                "quick" if iteration%a.val_every_updates == 0 or first == limit else None)
             if kind:
-                request_validation(a, progress, kind)
                 if not validate_pending(a, progress, experiment, deadline):
                     break
         print(f"V4_SESSION_END completed={len(progress['completed'])}/{len(plan)} "

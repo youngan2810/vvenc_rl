@@ -469,6 +469,11 @@ class CoordinatorContracts(unittest.TestCase):
         import agent_v4.train as train
         from real_reward_pilot import sha256_file
         calls = []
+        commits = []
+        original_commit = train.commit_progress
+        def capture_commit(root,progress):
+            original_commit(root,progress)
+            commits.append(json.loads((root/'progress.json').read_text()))
 
         def fake_jobs(jobs, repo, decoder, checkpoint, input_root, timeout):
             ckpt, model, _ = load(checkpoint)
@@ -494,7 +499,8 @@ class CoordinatorContracts(unittest.TestCase):
                     rows.append(row)
                     builder.commit_action(row["action"])
                 (out/"rollout.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
-                score = .95 if job.get('stochastic_validation') else .5
+                score = ((.95 if job.get('stochastic_validation') else .5) if job['split']=='val'
+                         else sum(r['reward'] for r in rows))
                 summary = {"split":job["split"],"index":job["index"],"video_id":f'{job["split"]}{job["index"]}',
                     "frames":frames,"rate":job["rate"],"start_frame":job["start"],"seed":job["seed"],
                     "deterministic":job["split"] == "val" and not job.get('stochastic_validation',False), "policy_sha256":sha256_file(checkpoint),
@@ -529,13 +535,17 @@ class CoordinatorContracts(unittest.TestCase):
                 ("agent_v4.train.dataset_source",lambda *x:Path("train.mov")),
                 ("agent_v4.train.video_frame_capacity",lambda x:1000),
                 ("agent_v4.train.subprocess.check_output",lambda cmd,**kw:"a"*40 if "rev-parse" in cmd else ""),
-                ("agent_v4.train.run_jobs",fake_jobs)]:
+                ("agent_v4.train.run_jobs",fake_jobs),
+                ("agent_v4.train.commit_progress",capture_commit)]:
                 stack.enter_context(patch(target,value))
             train.run(a)
             first = json.loads((a.output/"progress.json").read_text())
             self.assertEqual(len(first["completed"]),2)
             self.assertEqual(len(first["updates"]),1)
             self.assertEqual(first["updates"][0]["transitions"],64)
+            first_update_commit = next(p for p in commits if len(p['updates'])==1)
+            self.assertEqual(first_update_commit['pending_validation']['episodes'],2)
+            self.assertEqual(first_update_commit['pending_validation']['kind'],'quick')
             self.assertTrue(any(n == 2 and split == ["train","train"] for n,_,split in calls))
             self.assertNotIn("best_checkpoint",first)  # quick probes cannot select best
             self.assertEqual(first['validations'][0]['mean_score'],.5)
@@ -558,6 +568,10 @@ class CoordinatorContracts(unittest.TestCase):
             self.assertEqual(len(failed["completed"]),4)
             self.assertEqual(failed["latest_sha256"],second["latest_sha256"])
             self.assertEqual(len(failed["updates"]),2)
+            with patch('agent_v4.train.initialize_detector_assets',side_effect=RuntimeError('asset setup failed')):
+                with self.assertRaisesRegex(RuntimeError,'asset setup failed'):
+                    train.run(a)
+            self.assertTrue((a.output/'VVC_AGENT_V4_RESULTS.zip').is_file())
             bad = dict(second)
             bad["completed"] = list(second["completed"])
             bad["completed"][0] = {**bad["completed"][0],"step":9}

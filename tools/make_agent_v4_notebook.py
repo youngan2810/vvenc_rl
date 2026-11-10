@@ -29,6 +29,8 @@ Runtime mới: **4 encoder threads, MaxParallelFrames=1**, golden binary giữ n
 Paired vanilla dùng cùng runtime mới. Không so trực tiếp với bảng baseline500 cũ.
 Không resume checkpoint của run v4.2 trước FPP1, kể cả checkpoint chưa train.
 Native preflight, Train headroom và initial paired Val phải PASS trước PPO.
+Nếu setup/gate lỗi, notebook tự xuất `VVC_AGENT_V4_KAGGLE_SESSION.zip` cùng
+traceback và log hiện có, kể cả khi chưa tạo training progress.
 """), cell("code", """
 MODE = 'new'  # 'new' hoặc 'resume'
 MAX_ADDITIONAL_EPISODES = 50
@@ -58,28 +60,37 @@ WORK=Path('/kaggle/working'); INPUT=Path('/kaggle/input')
 REPO=WORK/'vvenc_rl_v4'; CODEC=WORK/'vvenc_rl_source'
 VVDEC=WORK/'vvdec_v3_2_0'; RUN=WORK/'vvc_agent_v42_fpp1_run'
 LOGS=WORK/'v42_fpp1_setup_logs';LOGS.mkdir(exist_ok=True)
-HEADROOM=None
+HEADROOM=None;PREFLIGHT=None;TRAIN_RC=None;TRAIN_STARTED=False
+SESSION_STAGE='setup'
 CANONICAL='e0b586c46f61e2ebbf131e4eb83f98817ff6e374'
 ENC=REPO/'bin/release-static/vvencapp'; DEC=VVDEC/'bin/release-static/vvdecapp'
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def run(cmd,cwd=None,check=True):
     path=LOGS/f'{len(list(LOGS.glob("*.log"))):03d}.log'
     print('$',' '.join(map(str,cmd)),flush=True)
+    return run_logged(cmd,path,cwd,check)
+
+def run_logged(cmd,path,cwd,check):
+    p=None
     with path.open('w') as log:
-        p=subprocess.Popen(list(map(str,cmd)),cwd=cwd,stdout=log,stderr=subprocess.STDOUT)
-        last=time.monotonic()
-        offset=0;pending=''
-        while p.poll() is None:
-            time.sleep(2)
-            with path.open(errors='replace') as reader:
-                reader.seek(offset);pending+=reader.read();offset=reader.tell()
-            lines=pending.split('\n');pending=lines.pop()
-            for line in lines:
-                if line.startswith(('V4_','AGENT_V4','Traceback','ERROR','ValueError','RuntimeError')):
-                    print(line,flush=True)
-            if time.monotonic()-last>40:
-                print('RUNNING',path.name,flush=True);last=time.monotonic()
-        rc=p.returncode
+        p=subprocess.Popen(list(map(str,cmd)),cwd=cwd,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        try:
+            last=time.monotonic()
+            offset=0;pending=''
+            while p.poll() is None:
+                time.sleep(2)
+                with path.open(errors='replace') as reader:
+                    reader.seek(offset);pending+=reader.read();offset=reader.tell()
+                lines=pending.split('\n');pending=lines.pop()
+                for line in lines:
+                    if line.startswith(('V4_','AGENT_V4','Traceback','ERROR','ValueError','RuntimeError')):
+                        print(line,flush=True)
+                if time.monotonic()-last>40:
+                    print('RUNNING',path.name,flush=True);last=time.monotonic()
+            rc=p.returncode
+        except BaseException:
+            stop_launcher_process(p)
+            raise
     print(path.read_text(errors='replace')[-2200:],flush=True)
     if check and rc:raise RuntimeError(f'Failed rc={rc}; inspect {path}')
     return rc
@@ -223,37 +234,39 @@ cmd+=['--auxiliary-mode',cfg['ppo_config']['auxiliary_mode'],
       '--credit-assignment',cfg['ppo_config']['credit_assignment']]
 if RESUME_ARCHIVE is not None and not (RUN/'progress.json').exists():
     cmd+=['--resume-archive',RESUME_ARCHIVE]
+TRAIN_STARTED=True
+SESSION_STAGE='training'
 TRAIN_RC=run(cmd,cwd=REPO,check=False)
 print('TRAIN_PROCESS_RETURN_CODE',TRAIN_RC)
 """), cell("code", """
 from IPython.display import display,FileLink
-from agent_v4.session import export_resume,export_results
-progress_path=RUN/'progress.json'
-assert progress_path.exists(),'Chưa có training progress; xem setup/training log'
-progress=json.loads(progress_path.read_text())
-export_resume(RUN,progress);export_results(RUN)
-print('COMPLETED',len(progress['completed']),'UPDATES',len(progress['updates']),
-      'PENDING_VAL',progress.get('pending_validation'),'BEST_FULL_VAL',progress.get('best_checkpoint'))
-if progress['validations']:print('LATEST_VAL',progress['validations'][-1])
 session=WORK/'VVC_AGENT_V4_KAGGLE_SESSION.zip'
-with zipfile.ZipFile(session,'w',zipfile.ZIP_STORED) as z:
-    for name in ('VVC_AGENT_V4_RESUME.zip','VVC_AGENT_V4_RESULTS.zip'):
-        z.write(RUN/name,name)
-    for path in LOGS.rglob('*'):
-        if path.is_file():z.write(path,'setup_logs/'+path.relative_to(LOGS).as_posix())
-    for path in PREFLIGHT.rglob('*'):
-        if path.is_file() and path.suffix!='.yuv':z.write(path,'native_preflight/'+path.relative_to(PREFLIGHT).as_posix())
-    if HEADROOM is not None:
-        for path in HEADROOM.rglob('*'):
-            if path.is_file() and path.suffix not in ('.yuv','.pt','.zip'):
-                z.write(path,'train_headroom/'+path.relative_to(HEADROOM).as_posix())
-    z.writestr('session_status.json',json.dumps({'training_return_code':TRAIN_RC,
-      'completed':len(progress['completed']),'source_commit':SOURCE_COMMIT}))
+if not session.exists():session=export_session(globals())
 display(FileLink(str(session)))
-display(FileLink(str(RUN/'VVC_AGENT_V4_RESUME.zip')))
-display(FileLink(str(RUN/'VVC_AGENT_V4_RESULTS.zip')))
-print('SESSION_EXPORTED — kiểm tra return code và Val trước khi quyết định chạy dài')
+for name in ('VVC_AGENT_V4_RESUME.zip','VVC_AGENT_V4_RESULTS.zip'):
+    if (RUN/name).is_file():display(FileLink(str(RUN/name)))
+print('SESSION_EXPORTED - inspect return code, completed, updates and Validation')
 """)]
+
+
+# Bootstrap must work even before cloning the project or importing Torch.
+_support = (Path(__file__).resolve().parents[1]/'scripts/rl/agent_v4/notebook_support.py').read_text(encoding='utf-8')
+_setup = cells[2]['source']
+_cuda_start = _setup.index('import torch\n')
+_cuda_end = _setup.index("CANONICAL=")
+_bootstrap = _setup[:_cuda_start]+_setup[_setup.index("WORK=Path("):_cuda_end]+_support+'\n'
+_body = _setup[_cuda_end:]
+# Function definitions above the resume logic are bootstrap, too.
+_resume = _body.index('RESUME_ARCHIVE=None\n')
+_bootstrap += _body[:_resume]
+_body = _setup[_cuda_start:_setup.index("WORK=Path(")]+_body[_resume:]
+
+def guarded(source):
+    return 'try:\n'+textwrap.indent(source,'    ')+'except BaseException:\n    record_session_failure(globals())\n    raise\n'
+
+cells[2]['source'] = _bootstrap+guarded(_body)
+cells[4]['source'] = guarded("SESSION_STAGE='build-and-native-gates'\n"+cells[4]['source'])
+cells[6]['source'] = guarded(cells[6]['source'])+"SESSION_STAGE='training-ended'\nexport_session(globals())\n"
 
 notebook = {"cells":cells,"metadata":{"kernelspec":{"display_name":"Python 3","language":"python","name":"python3"},
             "language_info":{"name":"python"},"accelerator":"GPU"},"nbformat":4,"nbformat_minor":5}

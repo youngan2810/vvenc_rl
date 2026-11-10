@@ -1,0 +1,35 @@
+{
+  "schema": "vvenc-agent-v42-training-readiness/1",
+  "date": "2026-11-10",
+  "base_commit": "c00ad610d245a795d17b603e0c83d0bfba1cebc5",
+  "tests": {
+    "full_suite_passed": 148,
+    "exit_code": 0,
+    "elapsed_seconds": 67.374,
+    "new_tests": 8,
+    "extended_coordinator_regression": true
+  },
+  "test_log_sha256": "d8fde2a56d853c58b983cb3872a265138840dd981735f1558fe0fc3d4e899fd1",
+  "notebook_sha256": "4ec353dc8e051bcbd2f6c27122d06eec3cc7c17c598cca1e84fe3d33cf3a7830",
+  "notebook_validation": "Code cells compile; embedded support matches source; new50/resume commands and exports dry runs PASS; generated setup/build failure exports tested.",
+  "codec_profile": {
+    "version": "golden-vvenc-fpp1/1",
+    "encoder_threads": 4,
+    "decoder_threads": 4,
+    "max_parallel_frames": 1,
+    "gop_size": 32,
+    "lookahead": 1,
+    "qpa": 1,
+    "preset": "medium",
+    "passes": 1,
+    "internal_bitdepth": 10,
+    "mtprofile": -1,
+    "paired_anchor": "fresh-vanilla-same-profile",
+    "historical_500_pair_baseline_compatible": false
+  },
+  "numeric_contract": "measured-float64-delta-before-cast-v1",
+  "legacy_files_unchanged": 47,
+  "native_source_changes": false,
+  "native_gpu_run_executed": false,
+  "rl_quality_gain_claim": false
+}

@@ -4,6 +4,9 @@ Runtime hiện tại là **FPP1 mới**:4 encoder threads, `MaxParallelFrames=1`
 4 decoder threads. Xem [bằng chứng và giới hạn](AGENT_V42_FPP1_PROFILE.md).
 Phải tạo run mới cả khi run v4.2 cũ chỉ tới iter0; không resume archive trước FPP1.
 RL và paired vanilla dùng cùng runtime, không dùng bảng500 baseline cũ làm anchor.
+Đã bổ sung [sửa target số học và recovery](AGENT_V42_TRAINING_READINESS.md):
+delta score đo trực tiếp, pending Val lưu cùng update, lỗi setup/gate cũng có
+`VVC_AGENT_V4_KAGGLE_SESSION.zip` và traceback trước khi có training progress.
 
 V4.2 bắt đầu **run mới**, schema `vvenc-agent-v4/2`. Không dùng pilot10 v4.1,
 EXPORT_5/EP650 hoặc Test export làm resume. Source/weights/optimizer thay đổi;

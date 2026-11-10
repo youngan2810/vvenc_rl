@@ -20,6 +20,29 @@ def episode_scores(rewards, dones):
     return result
 
 
+def measured_episode_scores(rewards, dones, final_scores):
+    """Use measured clip scores, checking their agreement with telescoping rewards.
+
+    Subtract paired float64 scores BEFORE casting to model dtype. Summing
+    float32 prefix differences can otherwise invent a delta for identical clips.
+    """
+    summed = episode_scores(rewards.double(),dones)
+    if (final_scores.shape != rewards.shape or not torch.isfinite(final_scores).all()):
+        raise ValueError('Invalid measured final scores')
+    first = 0
+    for end in torch.where(dones)[0].tolist():
+        measured = final_scores[first:end+1]
+        if not torch.equal(measured,measured[0].expand_as(measured)):
+            raise ValueError('Measured final score must be constant within its clip')
+        # Account for float32 storage/reduction if a caller supplies it.
+        tolerance = max(1e-10,4*torch.finfo(rewards.dtype).eps*
+                        float(rewards[first:end+1].abs().double().sum().clamp_min(1)))
+        if abs(float(summed[first]-measured[0])) > tolerance:
+            raise ValueError('Measured final score disagrees with telescoping rewards')
+        first = end+1
+    return final_scores.double()
+
+
 def counterfactual_advantages(final_scores, old_probs, frozen_q):
     """Observed outcome minus an own-action-independent frozen baseline.
 
