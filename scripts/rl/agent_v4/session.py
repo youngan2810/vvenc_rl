@@ -30,18 +30,15 @@ def export_resume(root, progress):
         p = progress["pending_validation"]
         expected[p["checkpoint"]] = p["sha256"]
     for v in progress.get("validations", []):
-        if v["kind"] == "full":
-            expected[v["checkpoint"]] = v["sha256"]
+        expected[v["checkpoint"]] = v["sha256"]
+    # Preserve the initialization even before initial Validation is scheduled.
+    initial = root/'checkpoints/iter_000000.pt'
+    if initial.is_file():
+        expected.setdefault('checkpoints/iter_000000.pt',sha256_file(initial))
     for name,digest in expected.items():
         if sha256_file(contained_path(root,name)) != digest:
             raise ValueError("Checkpoint checksum mismatch; preserving previous resume bundle: " + name)
-    paths = {root/"progress.json", root/progress["latest_checkpoint"]}
-    if progress.get("best_checkpoint"):
-        paths.add(root/progress["best_checkpoint"])
-    if progress.get("pending_validation"):
-        paths.add(root/progress["pending_validation"]["checkpoint"])
-    # Retain all full-validation candidates in the compact bundle.
-    paths.update(root/v["checkpoint"] for v in progress.get("validations", []) if v["kind"] == "full")
+    paths = {root/'progress.json', *(contained_path(root,n) for n in expected)}
     paths.update(root.glob("validation_*/progress.json"))
     manifest = {p.relative_to(root).as_posix():sha256_file(p) for p in sorted(paths)}
     dest = root/RESUME_NAME
@@ -57,6 +54,26 @@ def export_resume(root, progress):
 def restore(archive, root):
     if root.exists() and any(root.iterdir()):
         raise ValueError("Restore requires an empty output directory")
+    with zipfile.ZipFile(archive) as probe:
+        session = 'session_manifest.json' in probe.namelist()
+    if session:
+        from agent_v4.notebook_support import verified_session_parts
+        with verified_session_parts(archive) as (resume,results,status):
+            # Both archives and overlapping names are verified BEFORE writing.
+            restore(resume,root)
+            with zipfile.ZipFile(results) as z:
+                manifest=json.loads(z.read('results_manifest.json'))
+                for name in manifest['files']:
+                    path=contained_path(root,name)
+                    if path.exists():continue
+                    path.parent.mkdir(parents=True,exist_ok=True)
+                    with z.open(name) as src,path.open('wb') as dst:
+                        import shutil
+                        shutil.copyfileobj(src,dst)
+            atomic_json(root/'reports/parent_session.json',{
+                'archive_sha256':sha256_file(archive),'completed':status['completed'],
+                'updates':status['updates'],'cumulative_raw_evidence_restored':True})
+        return
     with zipfile.ZipFile(archive) as z:
         names = z.namelist()
         if len(names) != len(set(names)) or "bundle_manifest.json" not in names:
@@ -79,6 +96,9 @@ def restore(archive, root):
 
 def export_results(root):
     """Full evidence separate from resume; never include raw YUV or caches."""
+    if (root/'progress.json').exists():
+        from agent_v4.reporting import write_reports
+        write_reports(root)
     dest = root/"VVC_AGENT_V4_RESULTS.zip"
     tmp = dest.with_suffix(".zip.tmp")
     manifest = {}

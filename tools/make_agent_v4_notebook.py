@@ -19,8 +19,9 @@ cells = [cell("markdown", """
 Đây là run **v4 mới**, không resume EP650. T4×2, Internet ON.
 Input: locked65/7/100 manifest + Baseline protocol lock + BDD100K Train00 MOV.
 Lần đầu: `MODE='new'`, chạy mới đúng1 epoch theo yêu cầu:65 video ×5 rates =325 episode.
-Resume v4: đổi MODE và đặt RESUME_INPUT là đường dẫn ZIP hoặc thư mục
-đã giải nén của **VVC_AGENT_V4_RESUME**; cấu hình/commit được kế thừa tự động.
+Resume v4: đổi MODE và đặt RESUME_INPUT là đường dẫn **VVC_AGENT_V4_KAGGLE_SESSION.zip**
+nguyên gói từ phiên trước. Khôi phục cả model lẫn dữ liệu thô tích lũy;
+không dùng riêng compact RESUME vì sẽ thiếu lịch sử rollout/bitstream.
 Không dùng EXPORT_5, bundle Test EP650 hoặc checkpoint pilot v4.1. V4.2 là
 experiment mới: paired Train, critic phản thực, auxiliary task-outcome.
 Quick Val =4 greedy pairs +8 sampled diagnostic pairs (2 seed cố định).
@@ -38,10 +39,13 @@ chúng không vào PPO, không chọn best và không phải đối chứng cùn
 Native preflight, Train headroom và initial paired Val phải PASS trước PPO.
 Nếu setup/gate lỗi, notebook tự xuất `VVC_AGENT_V4_KAGGLE_SESSION.zip` cùng
 traceback và log hiện có, kể cả khi chưa tạo training progress.
+ZIP giữ checkpoint EP0, tất cả mốc Val, latest/best/pending; có manifest SHA256.
+Trong RESULTS/reports có CSV, biểu đồ PPO/Validation và completeness.json.
+Chỉ dùng session có resume/results FRESH và committed evidence COMPLETE để tiếp tục.
 """), cell("code", """
 MODE = 'new'  # 'new' hoặc 'resume'
 MAX_ADDITIONAL_EPISODES = 325  # Plan1 epoch tự chặn ở tổng325, kể cả khi resume
-RESUME_INPUT = ''  # Ví dụ /kaggle/input/datasets/owner/v4-session/VVC_AGENT_V4_RESUME
+RESUME_INPUT = ''  # Khi resume: /kaggle/input/.../VVC_AGENT_V4_KAGGLE_SESSION.zip nguyên gói
 SOURCE_COMMIT = ''  # New: trống=resolve branch rồi ghi SHA; resume: lấy từ archive
 SESSION_HOURS = 11.75  # Tổng budget từ đầu notebook, gồm setup; driver dành thời gian export
 NEW_PRESET = 'content-task'
@@ -107,33 +111,15 @@ def run_logged(cmd,path,cwd,check):
     return rc
 RESUME_ARCHIVE=None
 if MODE=='resume':
-    assert RESUME_INPUT,'Đặt RESUME_INPUT là ZIP hoặc thư mục v4 resume trong Input'
+    assert RESUME_INPUT,'Đặt RESUME_INPUT là file VVC_AGENT_V4_KAGGLE_SESSION.zip nguyên gói trong Input'
     src=Path(RESUME_INPUT)
     RESUME_ARCHIVE=WORK/'v4_verified_input.zip'
-    if src.is_dir():
-        manifest=json.loads((src/'bundle_manifest.json').read_text())
-        assert manifest['schema']=='vvenc-agent-v4/2','V4.2 requires a NEW run; v4.1 pilot cannot migrate'
-        with zipfile.ZipFile(RESUME_ARCHIVE,'w',zipfile.ZIP_DEFLATED) as z:
-            for name,digest in manifest['files'].items():
-                rel=PurePosixPath(name)
-                assert not rel.is_absolute() and '..' not in rel.parts and ':' not in name and '\\' not in name
-                path=src/name
-                assert sha(path)==digest, name
-                z.write(path,name)
-            z.write(src/'bundle_manifest.json','bundle_manifest.json')
-    else:
-        assert src.is_file(),src
-        shutil.copy2(src,RESUME_ARCHIVE)
-    with zipfile.ZipFile(RESUME_ARCHIVE) as z:
-        manifest=json.loads(z.read('bundle_manifest.json'))
-        assert manifest['schema']=='vvenc-agent-v4/2','Use the pinned old launcher for v4.1; do not migrate weights'
-        assert len(z.namelist())==len(set(z.namelist()))
-        assert set(z.namelist())==set(manifest['files'])|{'bundle_manifest.json'}
-        for name,digest in manifest['files'].items():
-            assert hashlib.sha256(z.read(name)).hexdigest()==digest,name
-        prior=json.loads(z.read('progress.json'))
+    assert src.is_file(), 'Resume requires the complete VVC_AGENT_V4_KAGGLE_SESSION.zip file'
+    shutil.copy2(src,RESUME_ARCHIVE)
+    prior=read_session_progress(RESUME_ARCHIVE)
     assert prior['purpose']=='training' and prior['schema']=='vvenc-agent-v4/2'
     EXP=prior['experiment'];SOURCE_COMMIT=EXP['source_commit']
+    assert EXP.get('artifact_contract')=='cumulative-evidence-v1', 'Start a NEW cumulative-evidence run; old bundles cannot supply missing raw history'
     # Reject an older runtime BEFORE checking out its pinned source.
     expected_profile={'version':'golden-vvenc-fpp1/1','encoder_threads':4,'decoder_threads':4,
         'max_parallel_frames':1,'gop_size':32,'lookahead':1,'qpa':1,'preset':'medium',
@@ -262,6 +248,11 @@ print('TRAIN_PROCESS_RETURN_CODE',TRAIN_RC)
 from IPython.display import display,FileLink
 session=WORK/'VVC_AGENT_V4_KAGGLE_SESSION.zip'
 if not session.exists():session=export_session(globals())
+with zipfile.ZipFile(session) as z:
+    previous_export=json.loads(z.read('session_status.json'))
+if (RUN/'progress.json').exists() and (previous_export.get('progress_sha256')!=sha(RUN/'progress.json') or
+        previous_export.get('export_error') or any(previous_export.get('exports',{}).get(k)!='fresh' for k in ('resume','results'))):
+    session=export_session(globals())
 if (RUN/'progress.json').exists():
     progress=json.loads((RUN/'progress.json').read_text())
     completed=len(progress['completed'])
@@ -272,7 +263,21 @@ if (RUN/'progress.json').exists():
 display(FileLink(str(session)))
 for name in ('VVC_AGENT_V4_RESUME.zip','VVC_AGENT_V4_RESULTS.zip'):
     if (RUN/name).is_file():display(FileLink(str(RUN/name)))
-print('SESSION_EXPORTED - inspect return code, completed, updates and Validation')
+with zipfile.ZipFile(session) as z:
+    status=json.loads(z.read('session_status.json'))
+print('EXPORTS',status.get('exports'),'EXPORT_ERROR',status.get('export_error'))
+report=RUN/'reports/completeness.json'
+if report.exists():
+    coverage=json.loads(report.read_text())
+    artifacts_ok=(coverage['committed_evidence_complete'] and coverage['completed_episodes']==completed and
+                  coverage['updates']==len(progress['updates']) and not status.get('export_error') and
+                  all(status.get('exports',{}).get(k)=='fresh' for k in ('resume','results')))
+    print('ARTIFACT_STATUS','COMPLETE' if artifacts_ok else 'INCOMPLETE',
+          'MISSING_OR_INVALID',len(coverage['missing_or_invalid']),'PLOTS',coverage['plots'])
+    display(FileLink(str(report)))
+    for name in ('updates.csv','pairs.csv','validation_history.csv','checkpoint_index.csv','ppo_learning.png','validation_learning.png','delta_qp_heatmap.png'):
+        if (RUN/'reports'/name).is_file():display(FileLink(str(RUN/'reports'/name)))
+print('DOWNLOAD THE COMPLETE SESSION ZIP; use this same ZIP for cumulative resume')
 """)]
 
 

@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-10",
+  "base_commit": "cc341e3f939fdce10bf1664aca6c3aa2e2403089",
+  "artifact_contract": "cumulative-evidence-v1",
+  "full_suite": {
+    "file": "agent_v4_cumulative_exports_full_tests.log",
+    "tests_passed": 176,
+    "sha256": "5d746cf79528af83cfa8f80b72ec98c1ded007b2a397ffdae21dfe73699ce54f"
+  },
+  "final_focused": {
+    "file": "agent_v4_cumulative_exports_final_tests.log",
+    "tests_passed": 14,
+    "sha256": "66d66a39e400020dcf16e451024c2fe6ecde85e87b44908f88868378bd539d86"
+  },
+  "note": "Full176 then final focused14 after status-hash/final-cell polish and three additional export cases; counts overlap.",
+  "verified": [
+    "EP0/all Validation checkpoint retention and checksum failure preservation",
+    "Two consecutive complete-session restores retain raw artifacts, checkpoints and per-session environment",
+    "Resume failure does not suppress new RESULTS or raw failure fallback; stale exports rejected",
+    "Results failure preserves current raw fallback and rejects stale normal continuation",
+    "Outer manifest corruption, unsafe paths and disagreeing inner progress rejected before restore writes",
+    "Missing committed raw data marks incomplete and rejects normal continuation",
+    "Partially completed pending Validation retains earlier pairs across restore",
+    "Derived CSV precision/recall and frame budget match fixture counts",
+    "Generated notebook new325/epochs1 and frozen resume config; all cells compile",
+    "Training loop change is solely artifact-contract metadata; model/reward/native code unchanged"
+  ],
+  "gpu_native_validation": "Not run in this patch. CPU/mock/archive tests do not establish codec quality or learning gains.",
+  "notebook_sha256": "6792907c7b48d2038f40322361a5677f98791c7f180b62d38742c9fa8ef9ccf8",
+  "file_sha256": {
+    "scripts/rl/agent_v4/session.py": "628ef7ec05a7406863fd977c9d56aa43013773394a165ebe24b7c9d8a7358ec5",
+    "scripts/rl/agent_v4/notebook_support.py": "753f422bc2059aa3dcd872f2cb7fe7f11283041d0f49c82db7f6b73c1329fae5",
+    "scripts/rl/agent_v4/reporting.py": "3646d836650673fbb052f3ab925a6d4164b9015afc54d33a6a0818cc7b1c8b56",
+    "scripts/rl/agent_v4/train.py": "65e72eb273e2950d8a7ebc98b0b34625af81afd5d6756f17628238d3a488c262",
+    "scripts/rl/test_agent_v4_exports.py": "cd445d0345d8f69af08594800d12d0bdd1d24153bf3a7719e3fc5d4d3bccb0b8",
+    "tools/make_agent_v4_notebook.py": "96371f267f11ce7f83e87be8d361cb09ab67b24aa46e20cb26dcf615092b5f9d",
+    "notebooks/VVenC_Agent_v4_Pilot_Kaggle.ipynb": "6792907c7b48d2038f40322361a5677f98791c7f180b62d38742c9fa8ef9ccf8",
+    "docs/AGENT_V4_EPOCH1_RUN.md": "4fcdca46805fb4bbeab0178f1b6e42da10b2c20dabd5034f1395665ae2ee0fd3",
+    "docs/AGENT_V4_EVIDENCE_EXPORTS.md": "9e2db3237c92f93828aeb3f77bcc9adf6a2e4616fe191a19b07cf18349faae5c"
+  }
+}

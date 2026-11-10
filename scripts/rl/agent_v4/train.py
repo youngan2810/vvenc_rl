@@ -254,6 +254,7 @@ def run(a):
         'validation_clock':'episodes' if val_every_episodes else 'legacy-updates',
         'validation_spatial_controls':getattr(a,'validation_spatial_controls',False),
         'checkpoint_metadata_version':'completed-episodes-v1',
+        'artifact_contract':'cumulative-evidence-v1',
         "schedule_version":"interleaved-65-videos-v2", "split_ids_sha256":
         __import__("hashlib").sha256(json.dumps(splits, sort_keys=True).encode()).hexdigest()}
     experiment.update(deployment_rule='argmax',validation_diagnostic_seeds=[20261117,20261143],

@@ -42,12 +42,13 @@ if the additional-episode cap is left at325 during resume.
 
 This is a total training target, not a promise that setup,325 paired episodes
 and all Validation/controls fit one11.75-hour session. At each session end,
-download the session ZIP and keep `VVC_AGENT_V4_RESUME.zip`. For continuation:
+download the entire `VVC_AGENT_V4_KAGGLE_SESSION.zip`. For continuation, add
+that complete ZIP as a Kaggle input; do not extract just the compact RESUME:
 
 ```python
 MODE = 'resume'
 MAX_ADDITIONAL_EPISODES = 325
-RESUME_INPUT = '/kaggle/input/YOUR_DATASET/VVC_AGENT_V4_RESUME.zip'
+RESUME_INPUT = '/kaggle/input/YOUR_DATASET/VVC_AGENT_V4_KAGGLE_SESSION.zip'
 SOURCE_COMMIT = ''
 ```
 
@@ -55,7 +56,36 @@ The archive must belong to this reviewed one-epoch experiment. Configuration
 and exact source pin are inherited. The driver clamps the cap to the remaining
 one-epoch schedule, so resuming fromEP80 cannot train beyondEP325. If325 Train
 episodes are done but full Val is pending, resume finishes Val before stopping.
-An extracted resume directory with `bundle_manifest.json` is also accepted.
+The notebook verifies the outer manifest, both inner manifests, matching
+progress, fresh exports and committed-evidence coverage before checking out
+the pinned source. Old launchers/compact-only archives are not accepted by
+this cumulative-evidence launcher. Original CLI compact resume remains available
+for recovery, but does not claim to restore historical raw evidence.
+
+## Evidence exported
+
+The complete session contains initialization and every Validation checkpoint,
+latest/best/pending, optimizer/RNG state, cumulative raw episode/Validation
+evidence and per-session environment/native-gate/setup logs. Resume restores
+both RESUME and RESULTS into the run, so the next RESULTS remains cumulative.
+No previous ZIP is recursively embedded inside the next ZIP.
+
+`RESULTS/reports/` contains `updates.csv`, `pairs.csv`,
+`validation_history.csv`, checkpoint and case indexes, `completeness.json`,
+PPO/Validation PNG plots and a latest-greedy mean actor delta-QP heatmap.
+CSV precision/recall are computed from saved TP/FP/FN. Quick and full Validation
+are plotted separately; sampled diagnostics retain their fixed seeds.
+Plots are derived and optional if Matplotlib is unavailable; the report records
+plotting status, while raw evidence export continues.
+
+The last notebook cell prints **EPOCH1_STATUS** and **ARTIFACT_STATUS** separately.
+Inspect `EXPORTS`: both resume and results must be `fresh`, with no export error.
+Only a complete, fresh cumulative session is accepted for notebook continuation.
+Keep downloaded session backups even though later healthy exports are cumulative.
+Atomic local ZIP exports cannot ensure that a VM killed before persistent
+Kaggle output is saved will preserve its currently writing batch.
+
+See [export design and verification](AGENT_V4_EVIDENCE_EXPORTS.md).
 
 Keep learning claims separate: read greedy/sampled progress, measured spatial
 controls, actual bitrate and full Val deltas. More training provides more
