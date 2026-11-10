@@ -18,20 +18,22 @@ cells = [cell("markdown", """
 
 Đây là run **v4 mới**, không resume EP650. T4×2, Internet ON.
 Input: locked65/7/100 manifest + Baseline protocol lock + BDD100K Train00 MOV.
-Lần đầu: `MODE='new'`,10 episode. Chỉ chạy dài sau khi xem paired Val.
+Lần đầu: `MODE='new'`,50 episode theo pilot đã chốt. Review trước khi tăng tiếp.
 Resume v4: đổi MODE và đặt RESUME_INPUT là đường dẫn ZIP hoặc thư mục
 đã giải nén của **VVC_AGENT_V4_RESUME**; cấu hình/commit được kế thừa tự động.
 Không dùng EXPORT_5, bundle Test EP650 hoặc checkpoint pilot v4.1. V4.2 là
 experiment mới: paired Train, critic phản thực, auxiliary task-outcome.
 Quick Val =4 greedy pairs +8 sampled diagnostic pairs (2 seed cố định).
+Pilot50 có25 PPO update; quick Val ở0/20/40/50 episode nếu phiên đủ thời gian.
 """), cell("code", """
 MODE = 'new'  # 'new' hoặc 'resume'
-MAX_ADDITIONAL_EPISODES = 10
+MAX_ADDITIONAL_EPISODES = 50
 RESUME_INPUT = ''  # Ví dụ /kaggle/input/datasets/owner/v4-session/VVC_AGENT_V4_RESUME
 SOURCE_COMMIT = ''  # New: trống=resolve branch rồi ghi SHA; resume: lấy từ archive
 SESSION_HOURS = 11.75  # Tổng budget từ đầu notebook, gồm setup; driver dành thời gian export
 NEW_PRESET = 'content-task'
 NEW_AUXILIARY_MODE = 'task-outcome'  # 'presence' chỉ cho ablation run mới
+NEW_VAL_EVERY_UPDATES = 10  # 2 collectors: xem tiến triển sau20 và40 episode
 RUN_HEADROOM_DIAGNOSTIC = True  # Train-only, no PPO; chỉ chạy khi MODE=new
 NEW_EPOCHS, NEW_SEED = 3, 20261109
 assert MODE in ('new','resume') and MAX_ADDITIONAL_EPISODES >= 0
@@ -181,7 +183,7 @@ with (LOGS/'pip_freeze.txt').open('w') as f:
     subprocess.run([sys.executable,'-m','pip','freeze'],stdout=f,stderr=subprocess.STDOUT,check=True)
 """), cell("markdown", """
 ## Training và paired Val
-Mặc định chỉ10 episode mới, không tự chạy975. Resume kế thừa nguyên cấu hình,
+Mặc định50 episode mới, không tự chạy975. Resume kế thừa nguyên cấu hình,
 chỉ đổi số episode bổ sung/thời gian. Driver xuất resume sau mỗi PPO commit;
 khi lỗi thường vẫn xuất evidence trong finally. Không cam kết batch đang ghi
 sẽ còn nguyên nếu VM hard-kill. Theo dõi progress thật ở cell cuối.
@@ -189,7 +191,7 @@ sẽ còn nguyên nếu VM hard-kill. Theo dõi progress thật ở cell cuối.
 remaining=SESSION_HOURS*3600-(time.monotonic()-SESSION_START)
 assert remaining>2400,'Setup đã dùng gần hết budget; không khởi chạy batch mới'
 cfg=EXP or {'preset':NEW_PRESET,'epochs':NEW_EPOCHS,'seed':NEW_SEED,'frames':256,
- 'validation_frames':256,'workers':2,'val_every_updates':25,
+ 'validation_frames':256,'workers':2,'val_every_updates':NEW_VAL_EVERY_UPDATES,
  'reward':{'mode':'legacy-frame' if NEW_PRESET=='categorical-control' else 'clip-delta',
            'rate_mode':'symmetric','beta':.1,'tolerance':0},
  'ppo_config':{'auxiliary':.1 if NEW_PRESET=='content-task' else 0.,

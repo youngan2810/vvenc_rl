@@ -13,8 +13,8 @@
     "elapsed_seconds": 80.557
   },
   "test_log_sha256": "25a52e22939929ac7305d5a4ffa3e4a02d6679cee5d317464ff84addbc409d92",
-  "notebook_sha256": "fb759963a99c3b279f952e04f394336641856c8460000bb0d8a23c715ba46d7b",
-  "notebook_validation": "schema/code-cell compilation PASS; not executed on Kaggle",
+  "notebook_sha256": "0b8c0f27aef439177a779681d2d686ff881ad886fdfc7d86089446f7d27dd8ec",
+  "notebook_validation": "All code cells compile; dry-run command construction verified for new50 and frozen resume config; no Kaggle execution.",
   "legacy_python_files_unchanged": 47,
   "native_sources_modified": false,
   "model_parameters": 279375,
@@ -34,5 +34,21 @@
     "Real native reproducibility/headroom gate pending Kaggle.",
     "No measured v4.2 detection/bitrate gain or confirmed fix for native stream drift.",
     "No automatic v4.1 checkpoint migration or deterministic distillation."
-  ]
+  ],
+  "pilot_configuration": {
+    "mode": "new",
+    "additional_episodes": 50,
+    "workers": 2,
+    "ppo_updates_if_complete": 25,
+    "training_frames_if_complete": 12800,
+    "val_every_updates": 10,
+    "quick_validation_episode_marks": [
+      0,
+      20,
+      40,
+      50
+    ],
+    "session_hours": 11.75,
+    "algorithm_regression_tests_retained_from_commit": "4bb864b445d1c9b953b739f2d48c3309fb44605f"
+  }
 }

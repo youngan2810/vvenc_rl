@@ -9,11 +9,12 @@ Config notebook cho lần đầu:
 
 ```python
 MODE = 'new'
-MAX_ADDITIONAL_EPISODES = 10
+MAX_ADDITIONAL_EPISODES = 50
 RESUME_INPUT = ''
 SOURCE_COMMIT = ''  # resolve agent-v4-dev rồi pin SHA thật
 NEW_PRESET = 'content-task'
 NEW_AUXILIARY_MODE = 'task-outcome'
+NEW_VAL_EVERY_UPDATES = 10
 RUN_HEADROOM_DIAGNOSTIC = True
 SESSION_HOURS = 11.75
 ```
@@ -22,7 +23,7 @@ Working output mới là `/kaggle/working/vvc_agent_v42_run`, setup logs ở
 `/kaggle/working/v42_setup_logs`. Wrapper đã stream các dòng V4_* ra màn hình
 và vẫn giữ full log. Không sửa source/kernel của một job đang chạy.
 
-Notebook có sẵn: [VVenC_Agent_v4_Pilot_Kaggle.ipynb](../notebooks/VVenC_Agent_v4_Pilot_Kaggle.ipynb). Source của notebook được tạo bởi `tools/make_agent_v4_notebook.py`; notebook chỉ build/kiểm tra/gọi runner, không chứa bản sao thuật toán. Lần đầu giữ `MODE='new'`,10 episode. Lần resume đổi `MODE='resume'` và đặt `RESUME_INPUT`; notebook tự đọc các cấu hình còn lại từ bundle.
+Notebook có sẵn: [VVenC_Agent_v4_Pilot_Kaggle.ipynb](../notebooks/VVenC_Agent_v4_Pilot_Kaggle.ipynb). Source của notebook được tạo bởi `tools/make_agent_v4_notebook.py`; notebook chỉ build/kiểm tra/gọi runner, không chứa bản sao thuật toán. Lần đầu giữ `MODE='new'`,50 episode. Lần resume đổi `MODE='resume'` và đặt `RESUME_INPUT`; notebook tự đọc các cấu hình còn lại từ bundle.
 
 ## Input và môi trường
 
@@ -44,7 +45,7 @@ python scripts/rl/agent_v4_preflight.py --repo /kaggle/working/vvenc_rl_v4 \
 
 Preflight không dùng YOLO hoặc dữ liệu Train/Test. Nếu không PASS thì kiểm tra log trước; không bỏ assert hash/POC.
 
-## Pilot10 episode trên hai GPU
+## Pilot50 episode trên hai GPU
 
 ```bash
 python -u scripts/rl/agent_v4_train.py \
@@ -52,19 +53,26 @@ python -u scripts/rl/agent_v4_train.py \
   --decoder /kaggle/working/vvdec_v3_2_0/bin/release-static/vvdecapp \
   --output /kaggle/working/vvc_agent_v42_run \
   --preset content-task --epochs 3 --frames 256 --workers 2 \
-  --validation-frames 256 --seed 20261109 --val-every-updates 25 \
+  --validation-frames 256 --seed 20261109 --val-every-updates 10 \
   --reward clip-delta --rate-mode symmetric --beta .1 --rate-tolerance 0 \
   --credit-assignment counterfactual-final --auxiliary-mode task-outcome --auxiliary .1 \
-  --max-episodes 10 --max-hours 11.5
+  --max-episodes 50 --max-hours 11.5
 ```
 
 Hai GPU dùng cho hai frozen-YOLO collector độc lập. Encoder/decoder chạy CPU4 thread; actor bridge một CPU thread; PPO update trên CPU sau khi cả hai collector hoàn tất. Không phải VVenC encode hoặc PPO model chạy trên hai GPU.
 
 Trước lần PPO đầu có quick paired Val:4 greedy pairs +8 sampled diagnostic
 pairs. Mỗi greedy pair ban đầu có explicit zero gate; mọi all-zero paired
-result đều phải byte-identical với vanilla. Sau10 Train episode có quick Val
-khác. Mỗi25 update có quick Val; mỗi325 episode có full35 greedy-pair Val.
+result đều phải byte-identical với vanilla. Với50 episode và2 collectors có
+25 PPO update, tổng12.800 transitions. Quick Val ở0/20/40/50 episode, mỗi lần
+4 greedy +8 sampled diagnostic pairs. Mỗi325 episode có full35 greedy-pair Val.
 Sampled diagnostic không chọn best. Lịch vẫn975 episode; pilot không tự chạy hết.
+
+50 episode là mốc quan sát xu hướng, chưa đủ kết luận thắng v3 EP650 đã train
+với ngân sách lớn hơn. So delta greedy F1/score và actual bitrate với paired
+vanilla trước; reward v3/v4 khác nhau nên không so trực tiếp raw return.
+Session deadline/native gates vẫn có thể dừng trước50; luôn đọc completed
+và pending Validation trong export. Không dùng MODE=resume với pilot v4.1.
 
 Train cũng encode/decode paired vanilla cho từng clip để tạo target final
 score delta, nên overhead lớn hơn v4.1. Notebook chạy Train-only headroom
@@ -103,7 +111,7 @@ python -u scripts/rl/agent_v4_train.py \
   --output /kaggle/working/vvc_agent_v42_run \
   --resume-archive /kaggle/input/YOUR_DATASET/VVC_AGENT_V4_RESUME.zip \
   --preset content-task --epochs 3 --frames 256 --workers 2 \
-  --validation-frames 256 --seed 20261109 --val-every-updates 25 \
+  --validation-frames 256 --seed 20261109 --val-every-updates 10 \
   --reward clip-delta --rate-mode symmetric --beta .1 --rate-tolerance 0 \
   --credit-assignment counterfactual-final --auxiliary-mode task-outcome --auxiliary .1 \
   --max-episodes 90 --max-hours 11.5
