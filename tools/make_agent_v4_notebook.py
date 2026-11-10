@@ -141,6 +141,7 @@ if MODE=='resume':
     assert EXP.get('encoder_threads')==EXP.get('decoder_threads')==4
     assert EXP.get('collection_version')=='frozen-multiclip-waves-v1', 'NEW multi-clip run required; keep the old pilot50 as control'
     assert EXP.get('update_version')=='frozen-multiclip-ctu-ppo-outcome-v4', 'Use the launcher pinned to this update contract'
+    assert EXP.get('checkpoint_metadata_version')=='completed-episodes-v1', 'NEW reviewed run required; older checkpoints do not record episode count'
     print('RESUME_V4_EPISODES_BEFORE',len(prior['completed']))
 else:
     EXP=None

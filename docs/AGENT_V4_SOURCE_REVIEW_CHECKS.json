@@ -1,0 +1,105 @@
+{
+  "schema": "vvenc-agent-v4-source-review/1",
+  "date": "2026-11-10",
+  "base_commit": "ec3a418795eaf9ede85ece13e75b23899e764936",
+  "tests": {
+    "passed": 170,
+    "previous": 163,
+    "new": 7,
+    "exit_code": 0,
+    "elapsed_seconds": 122.668
+  },
+  "test_log_sha256": "672215dc25c824dc73ac51af6984ec5c4e40b35e4278e37715c071ddc383342e",
+  "notebook_sha256": "14764876732775b262e3fc5b06297b541caf6e8c7331fb1ad55f757f4dff8879",
+  "checkpoint_metadata_version": "completed-episodes-v1",
+  "model_architecture_changed": false,
+  "optimizer_objective_changed": false,
+  "legacy_files_unchanged": 47,
+  "native_sources_changed": false,
+  "native_source_tree_expected": "85a09ba2c6a7701b964647022f357d99caf39dfc",
+  "one_update_equivalence": {
+    "base_commit": "ec3a418795eaf9ede85ece13e75b23899e764936",
+    "scope": "Synthetic one-update equivalence against saved pre-review model code, not codec training",
+    "cases": [
+      {
+        "config": {
+          "rich_state": true,
+          "content": true,
+          "attention": true
+        },
+        "auxiliary_mode": "task-outcome",
+        "max_parameter_difference": 0.0,
+        "policy_loss_difference": 0.0
+      },
+      {
+        "config": {
+          "rich_state": true,
+          "content": true,
+          "attention": true
+        },
+        "auxiliary_mode": "presence",
+        "max_parameter_difference": 0.0,
+        "policy_loss_difference": 0.0
+      },
+      {
+        "config": {
+          "rich_state": true,
+          "content": false,
+          "attention": true
+        },
+        "auxiliary_mode": "task-outcome",
+        "max_parameter_difference": 0.0,
+        "policy_loss_difference": 0.0
+      },
+      {
+        "config": {
+          "rich_state": true,
+          "content": false,
+          "attention": true
+        },
+        "auxiliary_mode": "presence",
+        "max_parameter_difference": 0.0,
+        "policy_loss_difference": 0.0
+      },
+      {
+        "config": {
+          "rich_state": false,
+          "content": false,
+          "attention": false
+        },
+        "auxiliary_mode": "task-outcome",
+        "max_parameter_difference": 0.0,
+        "policy_loss_difference": 0.0
+      },
+      {
+        "config": {
+          "rich_state": false,
+          "content": false,
+          "attention": false
+        },
+        "auxiliary_mode": "presence",
+        "max_parameter_difference": 0.0,
+        "policy_loss_difference": 0.0
+      }
+    ],
+    "standalone_episode_reproduction": {
+      "old_reported": 0,
+      "fixed_reported": 10,
+      "checkpoint_iteration": 3
+    }
+  },
+  "notebook_validation": "All cells compile; new10/resume40, metadata guard and setup-failure regressions pass in the full suite.",
+  "gpu_native_smoke_executed": false,
+  "quality_gain_claim": false,
+  "scope": [
+    "Complete episode targets and CTU matching",
+    "Frozen multi-wave collection and atomic updates/resume",
+    "Standalone candidate provenance and incomplete exit status",
+    "Actor/critic gradient isolation and update equivalence",
+    "Validation and control exclusion from PPO/selector"
+  ],
+  "remaining_limits": [
+    "Native nonzero live/fixed replay needs Kaggle verification.",
+    "CPU tests do not establish a learning-quality or equal-actual-rate gain."
+  ]
+}

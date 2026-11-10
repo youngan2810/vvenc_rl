@@ -1,0 +1,71 @@
+{
+  "base_commit": "ec3a418795eaf9ede85ece13e75b23899e764936",
+  "scope": "Synthetic one-update equivalence against saved pre-review model code, not codec training",
+  "cases": [
+    {
+      "config": {
+        "rich_state": true,
+        "content": true,
+        "attention": true
+      },
+      "auxiliary_mode": "task-outcome",
+      "max_parameter_difference": 0.0,
+      "policy_loss_difference": 0.0
+    },
+    {
+      "config": {
+        "rich_state": true,
+        "content": true,
+        "attention": true
+      },
+      "auxiliary_mode": "presence",
+      "max_parameter_difference": 0.0,
+      "policy_loss_difference": 0.0
+    },
+    {
+      "config": {
+        "rich_state": true,
+        "content": false,
+        "attention": true
+      },
+      "auxiliary_mode": "task-outcome",
+      "max_parameter_difference": 0.0,
+      "policy_loss_difference": 0.0
+    },
+    {
+      "config": {
+        "rich_state": true,
+        "content": false,
+        "attention": true
+      },
+      "auxiliary_mode": "presence",
+      "max_parameter_difference": 0.0,
+      "policy_loss_difference": 0.0
+    },
+    {
+      "config": {
+        "rich_state": false,
+        "content": false,
+        "attention": false
+      },
+      "auxiliary_mode": "task-outcome",
+      "max_parameter_difference": 0.0,
+      "policy_loss_difference": 0.0
+    },
+    {
+      "config": {
+        "rich_state": false,
+        "content": false,
+        "attention": false
+      },
+      "auxiliary_mode": "presence",
+      "max_parameter_difference": 0.0,
+      "policy_loss_difference": 0.0
+    }
+  ],
+  "standalone_episode_reproduction": {
+    "old_reported": 0,
+    "fixed_reported": 10,
+    "checkpoint_iteration": 3
+  }
+}

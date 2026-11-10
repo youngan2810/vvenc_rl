@@ -10,7 +10,7 @@ import math
 import torch
 
 from agent_v4 import SCHEMA
-from agent_v4.checkpoint import load
+from agent_v4.checkpoint import load,recorded_episode_count
 from agent_v4.codec import require_runtime_profile
 from agent_v4.session import export_results
 from agent_v4.train import request_validation, validate_pending
@@ -34,6 +34,7 @@ def main():
     if not torch.cuda.is_available() or torch.cuda.device_count() < a.workers:
         p.error("Missing CUDA workers")
     ckpt,_,_ = load(a.checkpoint)
+    episodes=recorded_episode_count(ckpt)
     exp = ckpt["experiment"]
     require_runtime_profile(exp)
     verify_source(a.repo,exp)
@@ -45,6 +46,8 @@ def main():
         if (progress.get("purpose") != "validation-only" or
                 progress.get("experiment") != exp or
                 progress.get("latest_sha256") != sha256_file(a.checkpoint) or
+                progress.get('evaluated_episodes') != episodes or
+                progress.get('evaluated_iteration') != ckpt['iteration'] or
                 progress.get("validation_kind") != ("quick" if a.quick else "full")):
             p.error("Output belongs to another experiment/candidate/validation kind")
     else:
@@ -54,16 +57,21 @@ def main():
         frozen.parent.mkdir(parents=True)
         shutil.copy2(a.checkpoint,frozen)
         progress = {"schema":SCHEMA,"purpose":"validation-only","experiment":exp,
+            'evaluated_episodes':episodes,'evaluated_iteration':ckpt['iteration'],
             "validation_kind":"quick" if a.quick else "full", "completed":[],"updates":[],"validations":[],
             "latest_checkpoint":"checkpoints/frozen.pt","latest_sha256":sha256_file(frozen)}
         request_validation(a,progress,"quick" if a.quick else "full")
     try:
+        if sha256_file(a.output/progress['latest_checkpoint'])!=progress['latest_sha256']:
+            raise ValueError('Frozen Validation checkpoint checksum mismatch')
         initialize_detector_assets(a.repo,read_baseline_config(a.input_root))
-        validate_pending(a,progress,exp,time.monotonic()+a.max_hours*3600)
+        complete=validate_pending(a,progress,exp,time.monotonic()+a.max_hours*3600)
+        print('V4_STANDALONE_VALIDATION_COMPLETE' if complete else 'V4_STANDALONE_VALIDATION_INCOMPLETE; resume pending pairs',flush=True)
     finally:
         print(export_results(a.output))
+    return 0 if complete else 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
 

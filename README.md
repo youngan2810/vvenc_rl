@@ -2,6 +2,11 @@
 
 ## Current training revision: frozen multi-clip PPO (2026-11-10)
 
+The [follow-up source review](docs/AGENT_V4_SOURCE_REVIEW.md) fixes standalone
+candidate episode labeling/incomplete exit status and removes a redundant actor
+forward. Reviewed checkpoints record actual completed episodes; the new10
+launcher and existing training settings are retained.
+
 The pilot50 at283a16e completed, with a positive greedy quick-Val signal but
 mostly frame-uniform deltas and no sampled-probe improvement. The next
 experiment separates GPU concurrency from rollout batch size: four frozen-

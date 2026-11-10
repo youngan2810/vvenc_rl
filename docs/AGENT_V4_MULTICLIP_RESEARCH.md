@@ -1,5 +1,9 @@
 # Multi-clip training revision: evidence, research and decisions
 
+The current implementation also includes the
+[follow-up correctness/performance review](AGENT_V4_SOURCE_REVIEW.md).
+Its metadata/forward fixes retain the experimental configuration below.
+
 Date:2026-11-10. Base source: `283a16ef47bfb7f175ad43b496a01d2e52313e8a`.
 This is an experimental training revision, not an empirically established optimum.
 The actor/critic architecture, categorical action space, reward and FPP1 codec

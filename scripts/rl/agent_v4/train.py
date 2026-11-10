@@ -13,7 +13,7 @@ import time
 import torch
 
 from agent_v4 import SCHEMA, MODEL_VERSION, STATE_VERSION, UPDATE_VERSION
-from agent_v4.checkpoint import load, save
+from agent_v4.checkpoint import load, save, recorded_episode_count
 from agent_v4.codec import runtime_profile
 from agent_v4.model import Agent, ModelConfig, PPOConfig, Trainer
 from agent_v4.reward import RewardConfig
@@ -48,6 +48,8 @@ def valid_progress(root, progress, experiment, plan):
     ckpt, _, _ = load(root/progress["latest_checkpoint"], experiment)
     if ckpt["iteration"] != len(progress["updates"]):
         raise ValueError("Checkpoint/progress iteration mismatch")
+    if recorded_episode_count(ckpt)!=len(completed):
+        raise ValueError('Checkpoint/progress episode count mismatch')
     if progress.get("updates") and progress["updates"][-1]["checkpoint_sha256"] != progress["latest_sha256"]:
         raise ValueError("Latest update does not name current checkpoint")
     pending = progress.get("pending_validation")
@@ -71,6 +73,8 @@ def validate_pending(a, progress, experiment, deadline):
     if pending is None:
         return True
     ckpt = a.output/pending["checkpoint"]
+    if sha256_file(ckpt)!=pending['sha256']:
+        raise ValueError('Pending Validation checkpoint checksum mismatch')
     kind = pending["kind"]
     nvideos = 7 if kind == "full" else 2
     rates = [50,80,120,160,200] if kind == "full" else [50,120]
@@ -80,6 +84,7 @@ def validate_pending(a, progress, experiment, deadline):
     spatial_controls = (getattr(a,'spatial_controls',False) or (kind=='quick' and
         pending['episodes']>0 and experiment.get('validation_spatial_controls',False)))
     cfg = {"checkpoint_sha256":pending["sha256"], "experiment":experiment,
+           'episodes':pending['episodes'],'checkpoint_iteration':pending['checkpoint_iteration'],
            "kind":kind, "videos":nvideos, "rates":rates, "frames":a.validation_frames,
            "deployment_rule":"argmax","diagnostic_seeds":diagnostic_seeds,'collector_workers':a.workers,
            'spatial_controls':spatial_controls}
@@ -120,6 +125,7 @@ def validate_pending(a, progress, experiment, deadline):
             'macro_delta_score':sum(s['delta_score'] for s in ss)/len(ss),
             'macro_delta_f1':sum(s['delta_f1'] for s in ss)/len(ss)})
     metrics = {"kind":kind, "checkpoint":pending["checkpoint"], "sha256":pending["sha256"],
+               'checkpoint_iteration':pending['checkpoint_iteration'],
                "episodes":pending["episodes"], "pairs":len(summaries),
                "mean_score":sum(s["metrics"]["score"] for s in summaries)/len(summaries),
                "mean_selection_score":sum(s["metrics"]["selection_score"] for s in summaries)/len(summaries),
@@ -166,9 +172,11 @@ def validate_pending(a, progress, experiment, deadline):
 
 def stage_validation(progress, kind):
     """Set pending Val in memory, so it commits atomically with a new update."""
-    n = len(progress["completed"])
+    validation_only=progress.get('purpose')=='validation-only'
+    n = progress['evaluated_episodes'] if validation_only else len(progress['completed'])
+    iteration=progress['evaluated_iteration'] if validation_only else len(progress.get('updates',[]))
     progress["pending_validation"] = {
-        "kind":kind, "episodes":n, "checkpoint":progress["latest_checkpoint"],
+        "kind":kind, "episodes":n,'checkpoint_iteration':iteration,"checkpoint":progress["latest_checkpoint"],
         "sha256":progress["latest_sha256"],
         "output":f"validation_{n:06d}_{kind}"}
 
@@ -245,6 +253,7 @@ def run(a):
         'collection_version':'frozen-multiclip-waves-v1',
         'validation_clock':'episodes' if val_every_episodes else 'legacy-updates',
         'validation_spatial_controls':getattr(a,'validation_spatial_controls',False),
+        'checkpoint_metadata_version':'completed-episodes-v1',
         "schedule_version":"interleaved-65-videos-v2", "split_ids_sha256":
         __import__("hashlib").sha256(json.dumps(splits, sort_keys=True).encode()).hexdigest()}
     experiment.update(deployment_rule='argmax',validation_diagnostic_seeds=[20261117,20261143],
@@ -270,7 +279,7 @@ def run(a):
         model = Agent(mc)
         trainer = Trainer(model, pc)
         initial = a.output/"checkpoints/iter_000000.pt"
-        save(initial, model, trainer, experiment, 0)
+        save(initial, model, trainer, experiment, 0,completed_episodes=0)
         progress = {"schema":SCHEMA, "purpose":"training", "experiment":experiment, "completed":[], "updates":[],
                     "validations":[], "latest_checkpoint":initial.relative_to(a.output).as_posix(),
                     "latest_sha256":sha256_file(initial)}
@@ -361,7 +370,7 @@ def run(a):
                 'source_image_std':float(state['image'].float().std(unbiased=False))}
             iteration = len(progress["updates"])+1
             updated = new_attempt(a.output/"checkpoints"/f"iter_{iteration:06d}.pt")
-            save(updated, model, trainer, experiment, iteration)
+            save(updated, model, trainer, experiment, iteration,completed_episodes=first+size)
             for j, summary in enumerate(summaries):
                 step = first+j
                 progress["completed"].append({"step":step+1, "plan":plan[step],

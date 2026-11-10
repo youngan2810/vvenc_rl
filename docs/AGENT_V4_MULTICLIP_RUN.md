@@ -1,5 +1,10 @@
 # Run the new multi-clip pilot
 
+The [follow-up source review](AGENT_V4_SOURCE_REVIEW.md) additionally requires
+actual completed-episode metadata in checkpoints. Standalone Validation now
+reports the candidate's true episode/update count, automatically enables the
+declared post-training quick controls, and returns2 when pairs remain pending.
+
 Use `notebooks/VVenC_Agent_v4_Pilot_Kaggle.ipynb`. The standalone Downloads
 copy has the same filename and content. Import the updated notebook into a
 fresh Kaggle session, T4x2, Internet ON, with the same three inputs:

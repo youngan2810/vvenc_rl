@@ -39,5 +39,7 @@
     "Nonzero live/fixed preflight identity and new measured controls require Kaggle validation.",
     "Frame-modal control is open-loop replay, not a separately trained frame policy or matched-actual-rate comparator.",
     "Pilot10 is a smoke test, not sufficient to rank learning quality against the old pilot50."
-  ]
+  ],
+  "historical_source_commit": "ec3a418795eaf9ede85ece13e75b23899e764936",
+  "superseded_by": "AGENT_V4_SOURCE_REVIEW_CHECKS.json"
 }

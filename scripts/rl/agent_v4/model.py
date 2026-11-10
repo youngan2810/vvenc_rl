@@ -149,14 +149,16 @@ class Agent(nn.Module):
         tokens = self.actor(s)
         return Categorical(logits=self.action_head(tokens)), tokens
 
-    def forward(self, s):
-        distribution, tokens = self.policy_features(s)
+    def value(self, s):
+        """Critic-only graph; computing a value must not execute the actor."""
         if hasattr(self, "control"):
             m = self.control
-            value = m.critic(m.critic_encoder(torch.cat((s["local"][:,:3].flatten(1),s["global"][:,:8]),1))).squeeze(-1)
-        else:
-            value = self.value_head(self.critic(s).flatten(1)).squeeze(-1)
-        return distribution, value, self.occupancy_head(tokens).squeeze(-1)
+            return m.critic(m.critic_encoder(torch.cat((s["local"][:,:3].flatten(1),s["global"][:,:8]),1))).squeeze(-1)
+        return self.value_head(self.critic(s).flatten(1)).squeeze(-1)
+
+    def forward(self, s):
+        distribution, tokens = self.policy_features(s)
+        return distribution, self.value(s), self.occupancy_head(tokens).squeeze(-1)
 
     def sample(self, s, deterministic=False, actor_only=False):
         if actor_only:
@@ -323,7 +325,7 @@ class Trainer:
                 batch = {k:t[idx] for k,t in state.items()}
                 d,tokens = self.model.policy_features(batch)
                 # independent critic graph; actor/aux cannot train critic
-                _,value,aux = self.model(batch)
+                value = self.model.value(batch)
                 head_logp = d.log_prob(actions[idx]+2)
                 logp = head_logp if final_credit else head_logp.sum(-1)
                 old = old_log_probs[idx].gather(-1,(actions[idx]+2).unsqueeze(-1)).squeeze(-1) if final_credit else old_logp[idx]
@@ -341,6 +343,7 @@ class Trainer:
                     aux_loss = F.smooth_l1_loss(self.model.task_outcomes(tokens,actions[idx]),
                                               torch.log1p(task_outcomes[idx]))
                 else:
+                    aux=self.model.occupancy_head(tokens).squeeze(-1)
                     aux_loss = F.binary_cross_entropy_with_logits(aux, (occupancy[idx] > 0).float(),
                         pos_weight=aux.new_tensor(3.))
                 final_value_loss = .5*F.mse_loss(value, returns[idx])
